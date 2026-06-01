@@ -1,0 +1,12 @@
+{
+  "game_name": "the_enchanters_ledger",
+  "display_name": "The Enchanter's Ledger",
+  "save_slot": "autosave",
+  "version": "1.0.0",
+  "starting_coins": 36,
+  "starting_reputation": 0,
+  "starting_insight": 8,
+  "starting_focus": 80.0,
+  "max_focus": 100.0,
+  "focus_per_second": 3.0
+}
