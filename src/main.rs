@@ -2,12 +2,20 @@
 
 use macroquad::prelude::*;
 
+mod browser_clipboard;
 mod data;
 mod game;
+mod magical_circle;
+mod rune_diagnostics;
+mod rune_diagram;
+mod rune_drawing;
+mod rune_quality;
 mod state;
 mod ui;
 
 use game::Game;
+
+const UI_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Rajdhani-SemiBold.ttf");
 
 fn window_conf() -> Conf {
     Conf {
@@ -22,6 +30,10 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    macroquad_toolkit::ui::set_default_ui_font_from_bytes(UI_FONT_BYTES)
+        .expect("embedded UI font should load");
+    macroquad_toolkit::ui::set_min_ui_font_size(16.0);
+
     let mut game = Game::new().await;
 
     loop {

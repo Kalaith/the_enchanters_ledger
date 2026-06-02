@@ -4,12 +4,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Game Template | Web Hatchery Games</title>
+    <title>The Enchanter's Ledger | Web Hatchery Games</title>
     <link rel="stylesheet" href="../shared.css">
     <style>
         .game-container canvas {
-            image-rendering: pixelated;
-            image-rendering: crisp-edges;
+            image-rendering: auto;
+        }
+
+        .game-container:fullscreen {
+            width: 100vw;
+            height: 100vh;
+            aspect-ratio: auto;
+            border-radius: 0;
+        }
+
+        .game-container:fullscreen canvas {
+            width: 100vw;
+            height: 100vh;
         }
     </style>
 </head>
@@ -17,7 +28,7 @@
 <body>
     <div class="game-page">
         <header class="game-header">
-            <h1>Game Template</h1>
+            <h1>The Enchanter's Ledger</h1>
             <a href="../" class="back-link">Back to All Games</a>
         </header>
 
@@ -44,19 +55,19 @@
                 <section class="info-section">
                     <h2>About This Game</h2>
                     <p>
-                        A starter Rust + Macroquad game wired to macroquad-toolkit for UI,
-                        save/load, data loading, notifications, grid helpers, and camera controls.
+                        Run a small enchantment workshop as a non-mage who designs magical
+                        diagrams for customers who can power them with mana.
                     </p>
                 </section>
 
                 <section class="info-section" style="margin-top: 1rem;">
                     <h2>Controls</h2>
                     <ul class="controls-list">
-                        <li><kbd>Arrow Keys</kbd><span>Move selected tile</span></li>
-                        <li><kbd>Right Mouse</kbd><span>Drag camera</span></li>
-                        <li><kbd>+ / -</kbd><span>Zoom camera</span></li>
-                        <li><kbd>Space</kbd><span>Run first data action</span></li>
-                        <li><kbd>S / L</kbd><span>Save / load toolkit slot</span></li>
+                        <li><kbd>Left Mouse</kbd><span>Draw diagrams; click a guide rune, then click the slate to place a tracing guide</span></li>
+                        <li><kbd>Right Mouse</kbd><span>Hold on the slate to erase ink; right-click a selected guide rune to deselect</span></li>
+                        <li><kbd>T / D</kbd><span>Test the diagram / deliver the product</span></li>
+                        <li><kbd>R / N</kbd><span>Research new runes / decline the current commission</span></li>
+                        <li><kbd>S / L</kbd><span>Save / load the ledger</span></li>
                     </ul>
                 </section>
             </div>
@@ -70,7 +81,7 @@
                 <div class="sidebar-section">
                     <h3>Details</h3>
                     <ul class="meta-list">
-                        <li><span class="label">Genre</span><span class="value">Template</span></li>
+                        <li><span class="label">Genre</span><span class="value">Crafting Puzzle</span></li>
                         <li><span class="label">Engine</span><span class="value">Macroquad + Toolkit</span></li>
                         <li><span class="label">Platform</span><span class="value">Browser, Windows</span></li>
                     </ul>
@@ -86,23 +97,253 @@
     <!-- Macroquad JS Bundle -->
     <script src="mq_js_bundle.js"></script>
     <script>
-        document.getElementById('loading').style.display = 'none';
-        
-        // Rename this when you rename the Cargo package.
-        load("game_template.wasm");
+        function installEnchantersBrowserBridge(imports) {
+                const decoder = new TextDecoder();
+                const encoder = new TextEncoder();
+                const readJsString = (handle) => {
+                    const len = imports.env.js_string_length(handle);
+                    const ptr = wasm_exports.allocate_vec_u8(len);
+                    imports.env.js_unwrap_to_str(handle, ptr, len);
+                    return decoder.decode(new Uint8Array(wasm_memory.buffer, ptr, len));
+                };
+                const makeJsString = (value) => {
+                    const bytes = encoder.encode(value);
+                    const ptr = wasm_exports.allocate_vec_u8(bytes.length);
+                    new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+                    return imports.env.js_create_string(ptr, bytes.length);
+                };
+                const copyFromTextArea = (textArea) => {
+                    textArea.focus();
+                    textArea.select();
+                    textArea.setSelectionRange(0, textArea.value.length);
+                    let copied = false;
+                    try {
+                        copied = document.execCommand("copy");
+                    } catch (error) {
+                        console.error("clipboard execCommand failed:", error);
+                    }
+                    return copied;
+                };
+                const copyTextNow = (text) => {
+                    let textArea = document.getElementById("the-enchanters-ledger-hidden-clipboard");
+                    if (!textArea) {
+                        textArea = document.createElement("textarea");
+                        textArea.id = "the-enchanters-ledger-hidden-clipboard";
+                        textArea.setAttribute("readonly", "readonly");
+                        textArea.style.position = "fixed";
+                        textArea.style.left = "-10000px";
+                        textArea.style.top = "0";
+                        textArea.style.width = "1px";
+                        textArea.style.height = "1px";
+                        textArea.style.opacity = "0";
+                        document.body.appendChild(textArea);
+                    }
+                    textArea.value = text;
+                    const copied = copyFromTextArea(textArea);
+                    const canvas = document.getElementById("glcanvas");
+                    if (canvas) {
+                        canvas.focus();
+                    }
+                    return copied;
+                };
+                const showDiagnosticCopyPanel = (text) => {
+                    let panel = document.getElementById("the-enchanters-ledger-diagnostic-panel");
+                    if (!panel) {
+                        panel = document.createElement("div");
+                        panel.id = "the-enchanters-ledger-diagnostic-panel";
+                        panel.style.position = "fixed";
+                        panel.style.right = "16px";
+                        panel.style.bottom = "16px";
+                        panel.style.width = "min(640px, calc(100vw - 32px))";
+                        panel.style.maxHeight = "72vh";
+                        panel.style.padding = "12px";
+                        panel.style.background = "#11100d";
+                        panel.style.border = "1px solid #b78a32";
+                        panel.style.boxShadow = "0 16px 40px rgba(0, 0, 0, 0.45)";
+                        panel.style.zIndex = "9999";
+                        panel.style.color = "#f2dfb2";
+                        panel.style.fontFamily = "monospace";
 
-        function toggleFullscreen() {
+                        const title = document.createElement("div");
+                        title.textContent = "Diagnostic Log";
+                        title.style.fontWeight = "700";
+                        title.style.marginBottom = "8px";
+                        panel.appendChild(title);
+
+                        const textArea = document.createElement("textarea");
+                        textArea.id = "the-enchanters-ledger-diagnostic-text";
+                        textArea.setAttribute("readonly", "readonly");
+                        textArea.style.boxSizing = "border-box";
+                        textArea.style.width = "100%";
+                        textArea.style.height = "260px";
+                        textArea.style.maxHeight = "46vh";
+                        textArea.style.resize = "vertical";
+                        textArea.style.background = "#f1dfad";
+                        textArea.style.color = "#1c1307";
+                        textArea.style.border = "1px solid #6d4f1f";
+                        textArea.style.padding = "8px";
+                        textArea.style.font = "12px monospace";
+                        panel.appendChild(textArea);
+
+                        const status = document.createElement("div");
+                        status.id = "the-enchanters-ledger-diagnostic-status";
+                        status.textContent = "Browser blocked automatic copy. Use Copy or Download.";
+                        status.style.marginTop = "8px";
+                        status.style.fontSize = "12px";
+                        status.style.color = "#d8bd82";
+                        panel.appendChild(status);
+
+                        const row = document.createElement("div");
+                        row.style.display = "flex";
+                        row.style.gap = "8px";
+                        row.style.marginTop = "10px";
+                        panel.appendChild(row);
+
+                        const copyButton = document.createElement("button");
+                        copyButton.type = "button";
+                        copyButton.textContent = "Copy";
+                        copyButton.onclick = () => {
+                            const currentText = textArea.value;
+                            if (copyFromTextArea(textArea)) {
+                                status.textContent = "Copied diagnostic log.";
+                                return;
+                            }
+                            if (
+                                window.isSecureContext &&
+                                navigator.clipboard &&
+                                typeof navigator.clipboard.writeText === "function"
+                            ) {
+                                navigator.clipboard.writeText(currentText)
+                                    .then(() => status.textContent = "Copied diagnostic log.")
+                                    .catch((error) => {
+                                        console.error("clipboard_write failed:", error);
+                                        status.textContent = "Copy was blocked. The text is selected.";
+                                    });
+                            } else {
+                                status.textContent = "Copy was blocked. The text is selected.";
+                            }
+                        };
+                        row.appendChild(copyButton);
+
+                        const downloadButton = document.createElement("button");
+                        downloadButton.type = "button";
+                        downloadButton.textContent = "Download";
+                        downloadButton.onclick = () => {
+                            const blob = new Blob([textArea.value], { type: "text/plain" });
+                            const url = URL.createObjectURL(blob);
+                            const link = document.createElement("a");
+                            link.href = url;
+                            link.download = "the_enchanters_ledger_diagnostic_log.txt";
+                            link.click();
+                            URL.revokeObjectURL(url);
+                        };
+                        row.appendChild(downloadButton);
+
+                        const closeButton = document.createElement("button");
+                        closeButton.type = "button";
+                        closeButton.textContent = "Close";
+                        closeButton.onclick = () => {
+                            panel.remove();
+                            const canvas = document.getElementById("glcanvas");
+                            if (canvas) {
+                                canvas.focus();
+                            }
+                        };
+                        row.appendChild(closeButton);
+
+                        document.body.appendChild(panel);
+                    }
+
+                    const textArea = document.getElementById("the-enchanters-ledger-diagnostic-text");
+                    textArea.value = text;
+                    textArea.focus();
+                    textArea.select();
+                    textArea.setSelectionRange(0, text.length);
+                };
+
+                imports.env.storage_set_extern = (key, value) => {
+                    localStorage.setItem(readJsString(key), readJsString(value));
+                };
+                imports.env.storage_get_extern = (key) => {
+                    const value = localStorage.getItem(readJsString(key));
+                    return value === null ? -1 : makeJsString(value);
+                };
+                imports.env.storage_remove_extern = (key) => {
+                    localStorage.removeItem(readJsString(key));
+                };
+                imports.env.storage_exists_extern = (key) => {
+                    return localStorage.getItem(readJsString(key)) !== null;
+                };
+                imports.env.clipboard_write_text_extern = (ptr, len) => {
+                    const text = UTF8ToString(ptr, len);
+                    if (copyTextNow(text)) {
+                        return 2;
+                    }
+                    showDiagnosticCopyPanel(text);
+                    if (
+                        window.isSecureContext &&
+                        navigator.clipboard &&
+                        typeof navigator.clipboard.writeText === "function"
+                    ) {
+                        navigator.clipboard.writeText(text).catch((error) => {
+                            console.error("clipboard_write failed:", error);
+                        });
+                        return 1;
+                    }
+                    console.error("clipboard_write failed: browser clipboard API unavailable");
+                    return 0;
+                };
+        }
+
+        miniquad_add_plugin({
+            register_plugin: installEnchantersBrowserBridge,
+            version: 1,
+            name: "enchanters_browser_bridge"
+        });
+        if (typeof importObject !== "undefined" && importObject.env) {
+            installEnchantersBrowserBridge(importObject);
+        }
+        if (typeof add_missing_functions_stabs === "function") {
+            const addMissingFunctions = add_missing_functions_stabs;
+            add_missing_functions_stabs = (module) => {
+                installEnchantersBrowserBridge(importObject);
+                const result = addMissingFunctions(module);
+                installEnchantersBrowserBridge(importObject);
+                return result;
+            };
+        }
+
+        document.getElementById('loading').style.display = 'none';
+        focusGame();
+        window.addEventListener("click", focusGame);
+
+        load(`the_enchanters_ledger.wasm?v=${Date.now()}`);
+
+        async function toggleFullscreen() {
             const container = document.getElementById('game-container');
             if (!document.fullscreenElement) {
-                container.requestFullscreen();
+                await container.requestFullscreen();
             } else {
-                document.exitFullscreen();
+                await document.exitFullscreen();
             }
+            queueCanvasResize();
         }
 
         function focusGame() {
             document.getElementById('glcanvas').focus();
         }
+
+        function queueCanvasResize() {
+            window.dispatchEvent(new Event('resize'));
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+            setTimeout(focusGame, 0);
+        }
+
+        document.addEventListener('fullscreenchange', queueCanvasResize);
+
+        document.getElementById('glcanvas').addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+        });
     </script>
 </body>
 

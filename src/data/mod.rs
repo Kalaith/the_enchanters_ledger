@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 const GAME_CONFIG_JSON: &str = include_str!("../../assets/data/game_config.json");
 const RUNES_JSON: &str = include_str!("../../assets/data/runes.json");
 const COMMISSIONS_JSON: &str = include_str!("../../assets/data/commissions.json");
+const TALISMAN_JOBS_JSON: &str = include_str!("../../assets/data/talisman_jobs.json");
 const TEXTURE_MANIFEST_JSON: &str = include_str!("../../assets/data/texture_manifest.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,15 +49,6 @@ impl RuneCategory {
             RuneCategory::Modifier => "Modifier",
         }
     }
-
-    pub fn short(self) -> &'static str {
-        match self {
-            RuneCategory::Effect => "E",
-            RuneCategory::Shape => "S",
-            RuneCategory::Trigger => "T",
-            RuneCategory::Modifier => "M",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +87,7 @@ pub struct GameData {
     pub config: GameConfig,
     pub runes: Vec<RuneDef>,
     pub commissions: Vec<CommissionDef>,
+    pub talisman_jobs: Vec<CommissionDef>,
     pub texture_manifest: Vec<TextureConfig>,
 }
 
@@ -103,12 +96,14 @@ impl GameData {
         let config = load_embedded_json_labeled("game_config", GAME_CONFIG_JSON)?;
         let runes = load_embedded_json_labeled("runes", RUNES_JSON)?;
         let commissions = load_embedded_json_labeled("commissions", COMMISSIONS_JSON)?;
+        let talisman_jobs = load_embedded_json_labeled("talisman_jobs", TALISMAN_JOBS_JSON)?;
         let texture_manifest = load_embedded_json(TEXTURE_MANIFEST_JSON)?;
 
         Ok(Self {
             config,
             runes,
             commissions,
+            talisman_jobs,
             texture_manifest,
         })
     }
@@ -117,7 +112,7 @@ impl GameData {
         self.runes.iter().find(|rune| rune.id == id)
     }
 
-    pub fn rune_name(&self, id: &str) -> &str {
+    pub fn rune_name<'a>(&'a self, id: &'a str) -> &'a str {
         self.rune(id).map(|rune| rune.name.as_str()).unwrap_or(id)
     }
 
@@ -132,16 +127,9 @@ impl GameData {
         &self.commissions[safe_index]
     }
 
-    pub fn required_runes<'a>(&'a self, commission: &'a CommissionDef) -> Vec<&'a str> {
-        let mut required = vec![
-            commission.required_effect.as_str(),
-            commission.required_shape.as_str(),
-            commission.required_trigger.as_str(),
-        ];
-        if let Some(modifier) = &commission.optional_modifier {
-            required.push(modifier);
-        }
-        required
+    pub fn talisman_job(&self, index: usize) -> &CommissionDef {
+        let safe_index = index % self.talisman_jobs.len().max(1);
+        &self.talisman_jobs[safe_index]
     }
 }
 
@@ -157,5 +145,6 @@ mod tests {
         assert!(data.rune("light").is_some());
         assert!(data.rune("continuous").is_some());
         assert!(!data.commissions.is_empty());
+        assert!(!data.talisman_jobs.is_empty());
     }
 }

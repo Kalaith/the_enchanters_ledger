@@ -1,16 +1,31 @@
 //! Runtime state, save data, and enchantment evaluation.
 
-use crate::data::{CommissionDef, GameConfig, GameData, RuneCategory, RuneDef};
+use crate::data::{GameConfig, GameData, RuneCategory, RuneDef};
+use crate::rune_diagram::interpret_diagram;
+use crate::rune_drawing::{erase_strokes_at, DrawnStroke, StrokePoint};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-pub const BOARD_COLUMNS: usize = 5;
-pub const BOARD_ROWS: usize = 4;
-pub const BOARD_NODE_COUNT: usize = BOARD_COLUMNS * BOARD_ROWS;
+mod board;
+mod save;
+#[cfg(test)]
+mod tests;
+mod text;
+mod tutorial;
+mod work;
+
+pub use board::{
+    node_distance, node_grid, DesignBoard, GuideTemplate, Link, BOARD_COLUMNS, BOARD_NODE_COUNT,
+    BOARD_ROWS,
+};
+pub use save::migrate_save_value;
+use text::percent;
+pub use tutorial::TutorialStage;
+pub use work::{DiscoveryReward, JournalEntry, WorkOrderKind, DISCOVERY_INSIGHT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GamePhase {
+    Title,
     Naming,
     Playing,
 }
@@ -46,41 +61,12 @@ pub struct PlayerState {
     pub completed_orders: u32,
     pub accidents: u32,
     pub current_commission: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlacedRune {
-    pub rune_id: String,
-    pub node: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Link {
-    pub a: usize,
-    pub b: usize,
-}
-
-impl Link {
-    pub fn new(a: usize, b: usize) -> Self {
-        if a <= b {
-            Self { a, b }
-        } else {
-            Self { a: b, b: a }
-        }
-    }
-
-    pub fn contains(self, node: usize) -> bool {
-        self.a == node || self.b == node
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DesignBoard {
-    pub placed: Vec<PlacedRune>,
-    pub links: Vec<Link>,
-    pub selected_rune: Option<String>,
-    pub link_anchor: Option<usize>,
-    pub last_evaluation: Option<EnchantResult>,
+    #[serde(default)]
+    pub current_talisman: usize,
+    #[serde(default)]
+    pub active_work: WorkOrderKind,
+    #[serde(default)]
+    pub tutorial_stage: TutorialStage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,15 +98,18 @@ pub struct SaveData {
     pub player: PlayerState,
     pub board: DesignBoard,
     pub discoveries: Vec<DiscoveredRecipe>,
+    #[serde(default)]
+    pub journal: Vec<JournalEntry>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CraftReport {
     pub result: EnchantResult,
-    pub discovery: Option<String>,
+    pub discovery: Option<DiscoveryReward>,
     pub reward: i64,
     pub reputation: i64,
     pub insight: i64,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,12 +118,13 @@ pub struct GameSession {
     pub player: PlayerState,
     pub board: DesignBoard,
     pub discoveries: Vec<DiscoveredRecipe>,
+    pub journal: Vec<JournalEntry>,
 }
 
 impl GameSession {
     pub fn new(config: &GameConfig) -> Self {
         Self {
-            phase: GamePhase::Naming,
+            phase: GamePhase::Title,
             player: PlayerState {
                 name: "Steve".to_owned(),
                 coins: config.starting_coins,
@@ -146,9 +136,13 @@ impl GameSession {
                 completed_orders: 0,
                 accidents: 0,
                 current_commission: 0,
+                current_talisman: 0,
+                active_work: WorkOrderKind::Story,
+                tutorial_stage: TutorialStage::new_game(),
             },
             board: DesignBoard::new(),
             discoveries: Vec::new(),
+            journal: Vec::new(),
         }
     }
 
@@ -158,6 +152,7 @@ impl GameSession {
             player: save.player,
             board: save.board,
             discoveries: save.discoveries,
+            journal: save.journal,
         }
     }
 
@@ -168,6 +163,7 @@ impl GameSession {
             player: self.player.clone(),
             board: self.board.clone(),
             discoveries: self.discoveries.clone(),
+            journal: self.journal.clone(),
         }
     }
 
@@ -201,11 +197,10 @@ impl GameSession {
             (self.player.focus + config.focus_per_second * dt).min(config.max_focus);
     }
 
-    pub fn current_commission<'a>(&self, data: &'a GameData) -> &'a CommissionDef {
-        data.commission(self.player.current_commission)
-    }
-
     pub fn can_use_rune(&self, rune: &RuneDef) -> bool {
+        if let Some(allowed) = self.player.tutorial_stage.allowed_runes() {
+            return allowed.iter().any(|id| *id == rune.id);
+        }
         rune.tier <= self.player.workshop_rank
     }
 
@@ -217,91 +212,287 @@ impl GameSession {
             return Err(format!("{} is still locked in your archive.", rune.name));
         }
         self.board.selected_rune = Some(rune_id.to_owned());
+        self.board.template_armed = true;
         self.board.link_anchor = None;
         Ok(())
     }
 
-    pub fn select_link_tool(&mut self) {
+    pub fn deselect_rune(&mut self) {
         self.board.selected_rune = None;
+        self.board.template_armed = false;
         self.board.link_anchor = None;
     }
 
-    pub fn use_board_node(&mut self, node: usize, data: &GameData) -> Result<String, String> {
-        if node >= BOARD_NODE_COUNT {
-            return Err("That mark is outside the ledger page.".to_owned());
+    pub fn place_guide_template(
+        &mut self,
+        center: StrokePoint,
+        data: &GameData,
+    ) -> Result<String, String> {
+        let rune_id = self
+            .board
+            .selected_rune
+            .clone()
+            .ok_or_else(|| "Select a rune in the guide first.".to_owned())?;
+        let rune = data
+            .rune(&rune_id)
+            .ok_or_else(|| format!("Unknown rune: {rune_id}"))?;
+        if !self.can_use_rune(rune) {
+            return Err(format!("{} is still locked in your guide.", rune.name));
         }
+        if self.board.guide_templates.len() >= 12 {
+            self.board.guide_templates.remove(0);
+        }
+        self.board.guide_templates.push(GuideTemplate {
+            rune_id: rune_id.clone(),
+            center,
+            scale: 0.22,
+        });
+        self.board.template_armed = false;
+        Ok(format!(
+            "Placed {} as a tracing guide; only your ink will be scored.",
+            rune.name
+        ))
+    }
 
-        if let Some(rune_id) = self.board.selected_rune.clone() {
-            let rune = data
-                .rune(&rune_id)
-                .ok_or_else(|| format!("Unknown rune: {rune_id}"))?;
-            if !self.can_use_rune(rune) {
-                return Err(format!("{} is still locked.", rune.name));
-            }
-            self.spend_focus(2.0)?;
-            self.board.place(node, &rune_id);
-            Ok(format!("Inked {} at node {}", rune.name, node + 1))
-        } else {
-            self.link_from_node(node, data)
+    pub fn remove_guide_template(
+        &mut self,
+        index: usize,
+        data: &GameData,
+    ) -> Result<String, String> {
+        if index >= self.board.guide_templates.len() {
+            return Err("That tracing guide is already gone.".to_owned());
+        }
+        let template = self.board.guide_templates.remove(index);
+        Ok(format!(
+            "Removed {} guide.",
+            data.rune_name(&template.rune_id)
+        ))
+    }
+
+    pub fn start_drawing_stroke(&mut self, point: StrokePoint) {
+        self.board.last_diagnostic_log = None;
+        self.board.active_stroke = Some(DrawnStroke::new(point));
+    }
+
+    pub fn extend_drawing_stroke(&mut self, point: StrokePoint) {
+        if let Some(stroke) = &mut self.board.active_stroke {
+            stroke.push(point);
         }
     }
 
-    pub fn erase_node(&mut self, node: usize) -> Result<String, String> {
-        if self.board.remove(node) {
-            self.spend_focus(1.0)?;
-            Ok(format!("Scraped node {} clean", node + 1))
-        } else {
-            Err("There is no rune on that node.".to_owned())
+    pub fn finish_drawing_stroke(&mut self) {
+        if let Some(stroke) = self.board.active_stroke.take() {
+            if stroke.has_ink() {
+                self.board.drawing_strokes.push(stroke);
+                self.board.last_recognition = None;
+                self.board.last_diagnostic_log = None;
+            }
         }
+    }
+
+    pub fn clear_drawing(&mut self) {
+        self.board.clear_drawing();
+    }
+
+    pub fn erase_drawing_at(&mut self, point: StrokePoint, radius: f32) -> bool {
+        let erased = erase_strokes_at(&mut self.board.drawing_strokes, point, radius);
+        if erased {
+            self.board.last_diagnostic_log = None;
+        }
+        erased
+    }
+
+    pub fn interpret_drawing(&mut self, data: &GameData) -> Result<String, String> {
+        if self.board.drawing_strokes.is_empty() {
+            return Err("The diagram slate is blank.".to_owned());
+        }
+
+        let unlocked = data.runes.iter().filter(|rune| self.can_use_rune(rune));
+        let interpretation = interpret_diagram(&self.board.drawing_strokes, unlocked);
+        self.board.last_diagram = Some(interpretation.clone());
+
+        if !interpretation.circle_found {
+            self.board.last_interpretation_note =
+                Some("No enclosing circle was readable.".to_owned());
+            self.spend_focus(0.8)?;
+            return Err(
+                "The diagram needs an enclosing circle before it can hold meaning.".to_owned(),
+            );
+        }
+        if !interpretation.accepted() {
+            self.board.last_interpretation_note = Some(format!(
+                "Circle {}%, but no inner rune was clear enough.",
+                percent(interpretation.circle_quality)
+            ));
+            self.spend_focus(0.8)?;
+            return Err(format!(
+                "The circle reads at {}%, but no inner rune is clear enough.",
+                percent(interpretation.circle_quality)
+            ));
+        }
+
+        self.spend_focus(1.5 + interpretation.runes.len() as f32 * 0.7)?;
+        let mut occupied = HashSet::new();
+        let mut placed_nodes = Vec::new();
+        self.board.clear_marks();
+        for rune in &interpretation.runes {
+            let node = node_for_diagram_center(rune.center, &occupied);
+            occupied.insert(node);
+            placed_nodes.push(node);
+            self.board.place(node, &rune.rune_id, rune.quality);
+        }
+        for nodes in placed_nodes.windows(2) {
+            let link = Link::new(nodes[0], nodes[1]);
+            if !self.board.links.contains(&link) {
+                self.board.links.push(link);
+            }
+        }
+        self.board.active_stroke = None;
+        self.board.last_recognition = None;
+        self.board.last_diagram = Some(interpretation.clone());
+
+        let names = interpretation
+            .runes
+            .iter()
+            .map(|rune| data.rune_name(&rune.rune_id).to_owned())
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let recognized_ids = interpretation
+            .runes
+            .iter()
+            .map(|rune| rune.rune_id.as_str())
+            .collect::<Vec<_>>();
+        let commission = self.current_commission(data);
+        let missing_required = [
+            commission.required_effect.as_str(),
+            commission.required_shape.as_str(),
+            commission.required_trigger.as_str(),
+        ]
+        .into_iter()
+        .filter(|id| !recognized_ids.contains(id))
+        .map(|id| data.rune_name(id).to_owned())
+        .collect::<Vec<_>>();
+        let commission_fit = if missing_required.is_empty() {
+            " Ready to test this commission.".to_owned()
+        } else {
+            format!(
+                " Missing for this commission: {}.",
+                missing_required.join(" + ")
+            )
+        };
+        let rejected = if interpretation.rejected_marks > 0 {
+            format!(
+                "; {} unclear mark(s) ignored",
+                interpretation.rejected_marks
+            )
+        } else {
+            String::new()
+        };
+        let circle_spell = interpretation
+            .spell
+            .as_ref()
+            .map(|spell| format!(" {}", spell.note()))
+            .unwrap_or_default();
+        let note = format!(
+            "Recognized runes: {} (circle {}%, rune quality {}%{}).{}{}",
+            names,
+            percent(interpretation.circle_quality),
+            percent(interpretation.average_rune_quality()),
+            rejected,
+            commission_fit,
+            circle_spell
+        );
+        self.board.last_interpretation_note = Some(note.clone());
+        Ok(note)
     }
 
     pub fn clear_board(&mut self) {
-        self.board.placed.clear();
-        self.board.links.clear();
-        self.board.link_anchor = None;
+        self.board.clear_marks();
+        self.board.clear_drawing();
+        self.board.guide_templates.clear();
+        self.board.last_diagram = None;
+        self.board.last_interpretation_note = None;
+        self.board.last_diagnostic_log = None;
         self.board.last_evaluation = None;
     }
 
     pub fn test_design(&mut self, data: &GameData) -> CraftReport {
         let result = self.evaluate(data);
         let discovery = self.record_discovery(data, &result);
+        let mut insight = 0;
+        let mut notes = Vec::new();
+        if let Some(discovery) = &discovery {
+            insight += discovery.insight;
+            self.player.insight += discovery.insight;
+            notes.push(format!("Discovery notes +{} insight", discovery.insight));
+            self.add_journal_entry(
+                "Insight gained",
+                format!(
+                    "New recipe: {}. Discovery notes +{} insight.",
+                    discovery.name, discovery.insight
+                ),
+            );
+        }
         self.board.last_evaluation = Some(result.clone());
+        self.board.last_interpretation_note = Some(format!(
+            "Test {}: {} | Score {}. {}",
+            result.grade.label(),
+            result.title,
+            result.score,
+            result.side_effect
+        ));
         CraftReport {
             result,
             discovery,
             reward: 0,
             reputation: 0,
-            insight: 0,
+            insight,
+            notes,
         }
     }
 
     pub fn deliver_design(&mut self, data: &GameData) -> CraftReport {
         let commission = self.current_commission(data).clone();
+        let work_kind = self.active_work_kind();
         let result = self.evaluate(data);
         let discovery = self.record_discovery(data, &result);
-        let mut reward = 0;
-        let mut reputation = 0;
-        let mut insight = 1;
+        let (reward, mut reputation, client_insight) = match (work_kind, result.grade) {
+            (WorkOrderKind::Story, EnchantGrade::Brilliant) => (
+                commission.reward + (commission.reward / 3),
+                commission.reputation + 2,
+                commission.insight + 2,
+            ),
+            (WorkOrderKind::Story, EnchantGrade::Reliable) => {
+                (commission.reward, commission.reputation, commission.insight)
+            }
+            (WorkOrderKind::Story, EnchantGrade::Unstable) => (
+                commission.reward / 2,
+                commission.reputation.saturating_sub(2),
+                (commission.insight / 2).max(1),
+            ),
+            (WorkOrderKind::Story, EnchantGrade::Failed) => (0, -2, 0),
+            (WorkOrderKind::Talisman, EnchantGrade::Brilliant) => (
+                commission.reward + (commission.reward / 4),
+                commission.reputation,
+                commission.insight + 1,
+            ),
+            (WorkOrderKind::Talisman, EnchantGrade::Reliable) => {
+                (commission.reward, commission.reputation, commission.insight)
+            }
+            (WorkOrderKind::Talisman, EnchantGrade::Unstable) => {
+                (commission.reward / 2, 0, commission.insight.max(1))
+            }
+            (WorkOrderKind::Talisman, EnchantGrade::Failed) => (0, 0, 0),
+        };
+        let mut insight = client_insight;
+        let mut notes = Vec::new();
 
-        match result.grade {
-            EnchantGrade::Brilliant => {
-                reward = commission.reward + (commission.reward / 3);
-                reputation = commission.reputation + 2;
-                insight = commission.insight + 2;
-            }
-            EnchantGrade::Reliable => {
-                reward = commission.reward;
-                reputation = commission.reputation;
-                insight = commission.insight;
-            }
-            EnchantGrade::Unstable => {
-                reward = commission.reward / 2;
-                reputation = commission.reputation.saturating_sub(2);
-                insight = (commission.insight / 2).max(1);
-            }
-            EnchantGrade::Failed => {
-                reputation = -2;
-            }
+        if client_insight > 0 {
+            notes.push(format!("Client notes +{} insight", client_insight));
+        }
+        if let Some(discovery) = &discovery {
+            insight += discovery.insight;
+            notes.push(format!("Discovery notes +{} insight", discovery.insight));
         }
 
         if result.accident {
@@ -314,10 +505,26 @@ impl GameSession {
         self.player.insight += insight;
         self.player.completed_orders += 1;
         self.player.day += 1;
-        self.player.current_commission =
-            (self.player.current_commission + 1) % data.commissions.len().max(1);
-        self.board.last_evaluation = Some(result.clone());
+        if work_kind == WorkOrderKind::Story && result.grade != EnchantGrade::Failed {
+            self.player.current_commission =
+                (self.player.current_commission + 1) % data.commissions.len().max(1);
+        } else if work_kind == WorkOrderKind::Talisman {
+            self.rotate_talisman_work(data);
+        }
+        let body = if notes.is_empty() {
+            format!("{} produced no usable notes.", result.title)
+        } else {
+            format!(
+                "{}. Rewards: {} coins, {:+} reputation. {}.",
+                result.title,
+                reward,
+                reputation,
+                notes.join("; ")
+            )
+        };
+        self.add_journal_entry(format!("Delivered {}", commission.item), body);
         self.clear_board();
+        self.board.last_evaluation = Some(result.clone());
 
         CraftReport {
             result,
@@ -325,42 +532,8 @@ impl GameSession {
             reward,
             reputation,
             insight,
+            notes,
         }
-    }
-
-    pub fn skip_commission(&mut self, data: &GameData) {
-        self.player.day += 1;
-        self.player.reputation -= 1;
-        self.player.current_commission =
-            (self.player.current_commission + 1) % data.commissions.len().max(1);
-        self.clear_board();
-    }
-
-    pub fn research(&mut self) -> Result<String, String> {
-        if self.player.workshop_rank >= 4 {
-            return Err("The forbidden shelf is already open.".to_owned());
-        }
-        let next_rank = self.player.workshop_rank + 1;
-        let coin_cost = 24 + next_rank as i64 * 16;
-        let insight_cost = 6 + next_rank as i64 * 5;
-        if self.player.coins < coin_cost || self.player.insight < insight_cost {
-            return Err(format!(
-                "Research needs {} coins and {} insight.",
-                coin_cost, insight_cost
-            ));
-        }
-
-        self.player.coins -= coin_cost;
-        self.player.insight -= insight_cost;
-        self.player.workshop_rank = next_rank;
-        self.player.day += 1;
-        Ok(match next_rank {
-            2 => "Unlocked volatile adventurer runes: Fire, Wind, Frost, Force, Burst, Impact."
-                .to_owned(),
-            3 => "Unlocked refined trade runes: Growth, Sound, Healing, Water, Dawn, Hidden."
-                .to_owned(),
-            _ => "Unlocked forbidden theory: Gravity, Teleportation, Summoning, Time.".to_owned(),
-        })
     }
 
     fn spend_focus(&mut self, amount: f32) -> Result<(), String> {
@@ -371,40 +544,15 @@ impl GameSession {
         Ok(())
     }
 
-    fn link_from_node(&mut self, node: usize, data: &GameData) -> Result<String, String> {
-        let Some(first_rune) = self.board.rune_at(node) else {
-            return Err("Linking starts from an inked rune.".to_owned());
-        };
-        if let Some(anchor) = self.board.link_anchor {
-            if anchor == node {
-                self.board.link_anchor = None;
-                return Ok("Lifted the quill.".to_owned());
-            }
-            if self.board.rune_at(anchor).is_none() {
-                self.board.link_anchor = Some(node);
-                return Ok("Started a new link.".to_owned());
-            }
-            self.spend_focus(1.5)?;
-            let link = Link::new(anchor, node);
-            if !self.board.links.contains(&link) {
-                self.board.links.push(link);
-            }
-            self.board.link_anchor = Some(node);
-            let from = data.rune_name(first_rune);
-            let to = data.rune_name(self.board.rune_at(anchor).unwrap_or(first_rune));
-            Ok(format!("Linked {} with {}", to, from))
-        } else {
-            self.board.link_anchor = Some(node);
-            Ok(format!("Anchored link at {}", data.rune_name(first_rune)))
-        }
-    }
-
     fn evaluate(&self, data: &GameData) -> EnchantResult {
         let commission = self.current_commission(data);
         let placed = self.placed_runes(data);
         let mut by_category: HashMap<RuneCategory, Vec<&RuneDef>> = HashMap::new();
-        for rune in &placed {
-            by_category.entry(rune.category).or_default().push(*rune);
+        for placed_rune in &placed {
+            by_category
+                .entry(placed_rune.rune.category)
+                .or_default()
+                .push(placed_rune.rune);
         }
 
         let required = [
@@ -414,21 +562,58 @@ impl GameSession {
         ];
         let required_hits = required
             .iter()
-            .filter(|id| placed.iter().any(|rune| rune.id == **id))
+            .filter(|id| placed.iter().any(|placed| placed.rune.id == **id))
             .count();
         let optional_hit = commission
             .optional_modifier
             .as_ref()
-            .is_some_and(|id| placed.iter().any(|rune| rune.id == *id));
-        let has_core = [RuneCategory::Effect, RuneCategory::Shape, RuneCategory::Trigger]
-            .iter()
-            .all(|category| by_category.contains_key(category));
+            .is_some_and(|id| placed.iter().any(|placed| placed.rune.id == *id));
+        let has_core = [
+            RuneCategory::Effect,
+            RuneCategory::Shape,
+            RuneCategory::Trigger,
+        ]
+        .iter()
+        .all(|category| by_category.contains_key(category));
         let matched_request = required_hits == required.len();
+        let average_quality = if placed.is_empty() {
+            0.0
+        } else {
+            placed.iter().map(|placed| placed.quality).sum::<f32>() / placed.len() as f32
+        };
+        let weak_marks = placed.iter().filter(|placed| placed.quality < 0.58).count() as i32;
+        let circle_spell = self
+            .board
+            .last_diagram
+            .as_ref()
+            .and_then(|diagram| diagram.spell.as_ref());
 
-        let mut power = placed.iter().map(|rune| rune.power).sum::<i32>();
-        let mut stability = 48 + placed.iter().map(|rune| rune.stability).sum::<i32>();
-        let mut mana_cost = placed.iter().map(|rune| rune.mana_cost).sum::<i32>();
-        let mut safety = 35 + placed.iter().map(|rune| rune.safety).sum::<i32>();
+        let mut power = placed
+            .iter()
+            .map(|placed| {
+                (placed.rune.power as f32 * (0.35 + placed.quality * 0.65)).round() as i32
+            })
+            .sum::<i32>();
+        let mut stability = 48
+            + placed
+                .iter()
+                .map(|placed| {
+                    placed.rune.stability - ((1.0 - placed.quality).max(0.0) * 22.0).round() as i32
+                })
+                .sum::<i32>();
+        let mut mana_cost = placed
+            .iter()
+            .map(|placed| {
+                placed.rune.mana_cost + ((1.0 - placed.quality).max(0.0) * 12.0).round() as i32
+            })
+            .sum::<i32>();
+        let mut safety = 35
+            + placed
+                .iter()
+                .map(|placed| {
+                    placed.rune.safety - ((1.0 - placed.quality).max(0.0) * 18.0).round() as i32
+                })
+                .sum::<i32>();
         let mut score = required_hits as i32 * 24;
 
         if optional_hit {
@@ -437,6 +622,8 @@ impl GameSession {
         if has_core {
             score += 12;
         }
+        score += ((average_quality - 0.72) * 58.0).round() as i32;
+        score -= weak_marks * 14;
 
         let link_bonus = self.link_quality(data);
         power += link_bonus.power;
@@ -444,6 +631,14 @@ impl GameSession {
         mana_cost += link_bonus.cost;
         safety += link_bonus.safety;
         score += link_bonus.score;
+
+        if let Some(spell) = circle_spell {
+            power += spell.power_bonus;
+            stability += spell.stability_bonus;
+            mana_cost += spell.mana_cost_delta;
+            safety += spell.safety_bonus;
+            score += spell.score_bonus;
+        }
 
         for runes in by_category.values() {
             if runes.len() > 1 {
@@ -468,7 +663,8 @@ impl GameSession {
         stability = stability.clamp(0, 120);
         mana_cost = mana_cost.max(0);
         safety = safety.clamp(0, 120);
-        score = score.clamp(0, 120);
+        let q = average_quality.clamp(0.0, 1.0);
+        score = score.clamp(0, (68.0 + q * 52.0).round() as i32);
 
         let accident = stability < 26 || safety < 18;
         let grade = if !matched_request || !has_core || score < 35 {
@@ -481,8 +677,32 @@ impl GameSession {
             EnchantGrade::Reliable
         };
 
-        let title = self.result_title(data, commission, &by_category, grade);
-        let side_effect = self.side_effect(data, commission, grade, matched_request, accident);
+        let base_title = text::result_title(data, commission, &by_category, grade);
+        let title = if grade != EnchantGrade::Failed {
+            circle_spell
+                .filter(|spell| spell.tier_rank >= 3)
+                .map(|spell| spell.name.clone())
+                .unwrap_or(base_title)
+        } else {
+            base_title
+        };
+        let mut side_effect = text::side_effect(
+            data,
+            commission,
+            grade,
+            matched_request,
+            accident,
+            average_quality,
+            weak_marks,
+        );
+        if matched_request && !accident && grade != EnchantGrade::Failed {
+            if let Some(spell) = circle_spell {
+                side_effect = format!(
+                    "{} The {} flares through {} ring(s) and {} satellite seal(s).",
+                    side_effect, spell.name, spell.ring_count, spell.satellite_count
+                );
+            }
+        }
 
         EnchantResult {
             title,
@@ -498,11 +718,16 @@ impl GameSession {
         }
     }
 
-    fn placed_runes<'a>(&'a self, data: &'a GameData) -> Vec<&'a RuneDef> {
+    fn placed_runes<'a>(&'a self, data: &'a GameData) -> Vec<PlacedRuneRef<'a>> {
         self.board
             .placed
             .iter()
-            .filter_map(|placed| data.rune(&placed.rune_id))
+            .filter_map(|placed| {
+                data.rune(&placed.rune_id).map(|rune| PlacedRuneRef {
+                    rune,
+                    quality: placed.quality.clamp(0.0, 1.0),
+                })
+            })
             .collect()
     }
 
@@ -511,7 +736,8 @@ impl GameSession {
         let mut seen_pairs = HashSet::new();
 
         for link in &self.board.links {
-            let (Some(a), Some(b)) = (self.board.rune_at(link.a), self.board.rune_at(link.b)) else {
+            let (Some(a), Some(b)) = (self.board.rune_at(link.a), self.board.rune_at(link.b))
+            else {
                 continue;
             };
             let (Some(a_rune), Some(b_rune)) = (data.rune(a), data.rune(b)) else {
@@ -552,71 +778,11 @@ impl GameSession {
         quality
     }
 
-    fn result_title(
-        &self,
+    fn record_discovery(
+        &mut self,
         data: &GameData,
-        commission: &CommissionDef,
-        by_category: &HashMap<RuneCategory, Vec<&RuneDef>>,
-        grade: EnchantGrade,
-    ) -> String {
-        let effect = by_category
-            .get(&RuneCategory::Effect)
-            .and_then(|runes| runes.first())
-            .map(|rune| rune.name.as_str())
-            .unwrap_or("Uncertain");
-        let modifier = by_category
-            .get(&RuneCategory::Modifier)
-            .and_then(|runes| runes.first())
-            .map(|rune| rune.name.as_str());
-
-        match grade {
-            EnchantGrade::Brilliant => match modifier {
-                Some(modifier) => format!(
-                    "{} of {} {}",
-                    title_case(&commission.item),
-                    modifier,
-                    effect
-                ),
-                None => format!("Perfect {} of {}", title_case(&commission.item), effect),
-            },
-            EnchantGrade::Reliable => format!("{} of {}", title_case(&commission.item), effect),
-            EnchantGrade::Unstable => format!("Volatile {} of {}", commission.item, effect),
-            EnchantGrade::Failed => {
-                let required = data.rune_name(&commission.required_effect);
-                format!("{} of Mild {}", title_case(&commission.item), required)
-            }
-        }
-    }
-
-    fn side_effect(
-        &self,
-        data: &GameData,
-        commission: &CommissionDef,
-        grade: EnchantGrade,
-        matched_request: bool,
-        accident: bool,
-    ) -> String {
-        if !matched_request {
-            return format!(
-                "The diagram misses part of the request for {} + {} + {}.",
-                data.rune_name(&commission.required_effect),
-                data.rune_name(&commission.required_shape),
-                data.rune_name(&commission.required_trigger)
-            );
-        }
-        if accident {
-            return "The test bench coughs up smoke and the ink keeps glowing after you lift the quill."
-                .to_owned();
-        }
-        match grade {
-            EnchantGrade::Brilliant => "Clean output, tidy mana draw, and a margin note worth publishing.".to_owned(),
-            EnchantGrade::Reliable => "The enchantment works as commissioned and should hold under normal use.".to_owned(),
-            EnchantGrade::Unstable => "It works, but the margins hiss whenever someone says the activation phrase.".to_owned(),
-            EnchantGrade::Failed => "The result is more conversation piece than enchantment.".to_owned(),
-        }
-    }
-
-    fn record_discovery(&mut self, data: &GameData, result: &EnchantResult) -> Option<String> {
+        result: &EnchantResult,
+    ) -> Option<DiscoveryReward> {
         if result.grade == EnchantGrade::Failed {
             return None;
         }
@@ -638,7 +804,10 @@ impl GameSession {
             uses: 1,
             best_score: result.score,
         });
-        Some(name)
+        Some(DiscoveryReward {
+            name,
+            insight: DISCOVERY_INSIGHT,
+        })
     }
 
     fn signature(&self, data: &GameData) -> Option<String> {
@@ -662,48 +831,6 @@ impl GameSession {
     }
 }
 
-impl DesignBoard {
-    fn new() -> Self {
-        Self {
-            placed: Vec::new(),
-            links: Vec::new(),
-            selected_rune: Some("light".to_owned()),
-            link_anchor: None,
-            last_evaluation: None,
-        }
-    }
-
-    pub fn rune_at(&self, node: usize) -> Option<&str> {
-        self.placed
-            .iter()
-            .find(|placed| placed.node == node)
-            .map(|placed| placed.rune_id.as_str())
-    }
-
-    fn place(&mut self, node: usize, rune_id: &str) {
-        if let Some(existing) = self.placed.iter_mut().find(|placed| placed.node == node) {
-            existing.rune_id = rune_id.to_owned();
-        } else {
-            self.placed.push(PlacedRune {
-                rune_id: rune_id.to_owned(),
-                node,
-            });
-        }
-        self.links
-            .retain(|link| self.placed.iter().any(|r| r.node == link.a) && self.placed.iter().any(|r| r.node == link.b));
-    }
-
-    fn remove(&mut self, node: usize) -> bool {
-        let before = self.placed.len();
-        self.placed.retain(|placed| placed.node != node);
-        self.links.retain(|link| !link.contains(node));
-        if self.link_anchor == Some(node) {
-            self.link_anchor = None;
-        }
-        before != self.placed.len()
-    }
-}
-
 #[derive(Debug, Default)]
 struct LinkQuality {
     score: i32,
@@ -713,14 +840,10 @@ struct LinkQuality {
     safety: i32,
 }
 
-pub fn node_grid(node: usize) -> (i32, i32) {
-    ((node % BOARD_COLUMNS) as i32, (node / BOARD_COLUMNS) as i32)
-}
-
-pub fn node_distance(a: usize, b: usize) -> i32 {
-    let (ax, ay) = node_grid(a);
-    let (bx, by) = node_grid(b);
-    (ax - bx).abs() + (ay - by).abs()
+#[derive(Debug, Clone, Copy)]
+struct PlacedRuneRef<'a> {
+    rune: &'a RuneDef,
+    quality: f32,
 }
 
 fn ordered_pair(a: RuneCategory, b: RuneCategory) -> (RuneCategory, RuneCategory) {
@@ -740,98 +863,30 @@ fn category_rank(category: RuneCategory) -> u8 {
     }
 }
 
-fn title_case(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
+fn node_for_diagram_center(center: StrokePoint, occupied: &HashSet<usize>) -> usize {
+    (0..BOARD_NODE_COUNT)
+        .filter(|node| !occupied.contains(node))
+        .min_by(|a, b| {
+            let (ax, ay) = node_grid(*a);
+            let (bx, by) = node_grid(*b);
+            let a_pos = normalized_node_position(ax, ay);
+            let b_pos = normalized_node_position(bx, by);
+            let a_distance = normalized_distance(center, a_pos);
+            let b_distance = normalized_distance(center, b_pos);
+            a_distance.total_cmp(&b_distance)
+        })
+        .unwrap_or(0)
 }
 
-#[derive(Debug, Deserialize)]
-struct LegacySave {
-    points: Option<i64>,
-    energy: Option<f32>,
-    turn: Option<u32>,
+fn normalized_node_position(col: i32, row: i32) -> StrokePoint {
+    StrokePoint::new(
+        col as f32 / (BOARD_COLUMNS as f32 - 1.0),
+        row as f32 / (BOARD_ROWS as f32 - 1.0),
+    )
 }
 
-pub fn migrate_save_value(
-    detected_version: Option<String>,
-    value: Value,
-    config: &GameConfig,
-) -> Result<SaveData, String> {
-    let payload = value.get("data").cloned().unwrap_or(value);
-
-    if let Ok(mut current) = serde_json::from_value::<SaveData>(payload.clone()) {
-        current.version = config.version.clone();
-        return Ok(current);
-    }
-
-    let legacy: LegacySave = serde_json::from_value(payload)
-        .map_err(|err| format!("Unsupported save format {:?}: {}", detected_version, err))?;
-
-    let mut session = GameSession::new(config);
-    session.phase = GamePhase::Playing;
-    if let Some(points) = legacy.points {
-        session.player.coins = points;
-    }
-    if let Some(energy) = legacy.energy {
-        session.player.focus = energy.clamp(0.0, config.max_focus);
-    }
-    if let Some(turn) = legacy.turn {
-        session.player.day = turn.max(1);
-    }
-
-    Ok(session.to_save(&config.version))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::data::GameData;
-
-    fn data() -> GameData {
-        GameData::load().unwrap()
-    }
-
-    #[test]
-    fn matching_design_scores_as_working_enchantment() {
-        let data = data();
-        let mut session = GameSession::new(&data.config);
-        session.start_playing();
-        session.select_rune("light", &data).unwrap();
-        session.use_board_node(6, &data).unwrap();
-        session.select_rune("sphere", &data).unwrap();
-        session.use_board_node(7, &data).unwrap();
-        session.select_rune("continuous", &data).unwrap();
-        session.use_board_node(8, &data).unwrap();
-        session.select_link_tool();
-        session.use_board_node(6, &data).unwrap();
-        session.use_board_node(7, &data).unwrap();
-        session.use_board_node(8, &data).unwrap();
-
-        let report = session.test_design(&data);
-
-        assert!(report.result.matched_request);
-        assert_ne!(report.result.grade, EnchantGrade::Failed);
-        assert_eq!(session.discoveries.len(), 1);
-    }
-
-    #[test]
-    fn legacy_save_migrates_to_current_shape() {
-        let data = data();
-        let value = serde_json::json!({
-            "points": 42,
-            "energy": 99.0,
-            "turn": 3
-        });
-
-        let migrated =
-            migrate_save_value(Some("0.1.0".to_owned()), value, &data.config).unwrap();
-
-        assert_eq!(migrated.version, "1.0.0");
-        assert_eq!(migrated.player.coins, 42);
-        assert_eq!(migrated.player.focus, 99.0);
-        assert_eq!(migrated.player.day, 3);
-    }
+fn normalized_distance(a: StrokePoint, b: StrokePoint) -> f32 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    (dx * dx + dy * dy).sqrt()
 }

@@ -1,0 +1,369 @@
+//! Strict rune draftsmanship scoring for rewards and practice.
+
+use crate::data::RuneDef;
+use crate::rune_drawing::{
+    recognize_rune, template_strokes_for_rune, DrawnStroke, StrokePoint, MIN_RECOGNITION_CONFIDENCE,
+};
+
+#[derive(Debug, Clone)]
+pub struct RunePracticeReport {
+    pub target_rune_id: String,
+    pub read_rune_id: Option<String>,
+    pub confidence: f32,
+    pub quality: f32,
+    pub shape_score: f32,
+    pub start_score: f32,
+    pub stroke_order_score: f32,
+    pub accepted: bool,
+    pub feedback: String,
+}
+
+pub fn strict_quality_for_rune(rune_id: &str, strokes: &[DrawnStroke]) -> Option<f32> {
+    let candidate = NormalizedDrawing::from_strokes(strokes)?;
+    let template = template_strokes_for_rune(rune_id)?;
+    let template = NormalizedDrawing::from_strokes(&template)?;
+    let shape_score = ordered_shape_score(&candidate, &template);
+    let start_score = start_point_score(&candidate, &template);
+    let stroke_order_score = stroke_order_score(&candidate, &template);
+    Some((shape_score * 0.46 + start_score * 0.22 + stroke_order_score * 0.32).clamp(0.0, 1.0))
+}
+
+pub fn practice_report_for_rune<'a>(
+    rune_id: &str,
+    strokes: &[DrawnStroke],
+    runes: impl IntoIterator<Item = &'a RuneDef>,
+) -> Option<RunePracticeReport> {
+    let candidate = NormalizedDrawing::from_strokes(strokes)?;
+    let template = template_strokes_for_rune(rune_id)?;
+    let template = NormalizedDrawing::from_strokes(&template)?;
+    let recognized = recognize_rune(strokes, runes);
+    let shape_score = ordered_shape_score(&candidate, &template);
+    let start_score = start_point_score(&candidate, &template);
+    let stroke_order_score = stroke_order_score(&candidate, &template);
+    let quality =
+        (shape_score * 0.46 + start_score * 0.22 + stroke_order_score * 0.32).clamp(0.0, 1.0);
+    let read_rune_id = recognized.as_ref().map(|outcome| outcome.rune_id.clone());
+    let confidence = recognized
+        .as_ref()
+        .map_or(0.0, |outcome| outcome.confidence);
+    let accepted = read_rune_id.as_deref() == Some(rune_id)
+        && confidence >= MIN_RECOGNITION_CONFIDENCE
+        && quality >= 0.45;
+
+    Some(RunePracticeReport {
+        target_rune_id: rune_id.to_owned(),
+        read_rune_id,
+        confidence,
+        quality,
+        shape_score,
+        start_score,
+        stroke_order_score,
+        accepted,
+        feedback: practice_feedback(
+            accepted,
+            confidence,
+            shape_score,
+            start_score,
+            stroke_order_score,
+        ),
+    })
+}
+
+pub fn quality_label(score: f32) -> &'static str {
+    if score >= 0.92 {
+        "Masterwork"
+    } else if score >= 0.78 {
+        "Clean"
+    } else if score >= 0.58 {
+        "Readable"
+    } else {
+        "Practice"
+    }
+}
+
+fn practice_feedback(
+    accepted: bool,
+    confidence: f32,
+    shape: f32,
+    start: f32,
+    order: f32,
+) -> String {
+    if confidence < MIN_RECOGNITION_CONFIDENCE {
+        return "The mark is not readable yet. Trace the ghost lines and keep each stroke separate."
+            .to_owned();
+    }
+    if start < 0.68 {
+        return "Start each stroke on the gold dot. Circles score best when they begin at the top."
+            .to_owned();
+    }
+    if order < 0.68 {
+        return "Use the numbered stroke order and keep each stroke moving in the shown direction."
+            .to_owned();
+    }
+    if shape < 0.70 {
+        return "The rune reads, but the line shape drifts away from the guide.".to_owned();
+    }
+    if accepted {
+        "Clean practice mark. This stroke discipline will earn better workshop results.".to_owned()
+    } else {
+        "Readable, but not clean enough for high-rating work yet.".to_owned()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedDrawing {
+    strokes: Vec<Vec<StrokePoint>>,
+    aspect_ratio: f32,
+}
+
+impl NormalizedDrawing {
+    fn from_strokes(strokes: &[DrawnStroke]) -> Option<Self> {
+        let strokes = strokes
+            .iter()
+            .filter(|stroke| stroke.has_ink())
+            .cloned()
+            .collect::<Vec<_>>();
+        if strokes.is_empty() {
+            return None;
+        }
+
+        let mut min_x = f32::INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        for point in strokes.iter().flat_map(|stroke| &stroke.points) {
+            min_x = min_x.min(point.x);
+            min_y = min_y.min(point.y);
+            max_x = max_x.max(point.x);
+            max_y = max_y.max(point.y);
+        }
+
+        let width = (max_x - min_x).max(0.001);
+        let height = (max_y - min_y).max(0.001);
+        let span = width.max(height).max(0.06);
+        let pad_x = (span - width) * 0.5;
+        let pad_y = (span - height) * 0.5;
+        let origin_x = min_x - pad_x;
+        let origin_y = min_y - pad_y;
+        let normalized = strokes
+            .iter()
+            .map(|stroke| {
+                stroke
+                    .points
+                    .iter()
+                    .map(|point| {
+                        StrokePoint::new((point.x - origin_x) / span, (point.y - origin_y) / span)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        Some(Self {
+            strokes: normalized,
+            aspect_ratio: width / height,
+        })
+    }
+}
+
+fn ordered_shape_score(candidate: &NormalizedDrawing, template: &NormalizedDrawing) -> f32 {
+    let pairs = candidate.strokes.len().min(template.strokes.len());
+    if pairs == 0 {
+        return 0.0;
+    }
+    let stroke_score = candidate
+        .strokes
+        .iter()
+        .zip(&template.strokes)
+        .map(|(candidate, template)| strict_stroke_score(candidate, template))
+        .sum::<f32>()
+        / template.strokes.len().max(1) as f32;
+    let count_score = count_score(candidate.strokes.len(), template.strokes.len());
+    let aspect_score = ratio_score(candidate.aspect_ratio, template.aspect_ratio);
+    (stroke_score * 0.78 + count_score * 0.12 + aspect_score * 0.10).clamp(0.0, 1.0)
+}
+
+fn stroke_order_score(candidate: &NormalizedDrawing, template: &NormalizedDrawing) -> f32 {
+    if template.strokes.is_empty() {
+        return 0.0;
+    }
+    let ordered = candidate
+        .strokes
+        .iter()
+        .zip(&template.strokes)
+        .map(|(candidate, template)| strict_stroke_score(candidate, template))
+        .sum::<f32>()
+        / template.strokes.len() as f32;
+    (ordered * count_score(candidate.strokes.len(), template.strokes.len())).clamp(0.0, 1.0)
+}
+
+fn start_point_score(candidate: &NormalizedDrawing, template: &NormalizedDrawing) -> f32 {
+    if template.strokes.is_empty() {
+        return 0.0;
+    }
+    let score = candidate
+        .strokes
+        .iter()
+        .zip(&template.strokes)
+        .map(|(candidate, template)| {
+            let Some(candidate_start) = candidate.first() else {
+                return 0.0;
+            };
+            let Some(template_start) = template.first() else {
+                return 0.0;
+            };
+            (1.0 - distance(*candidate_start, *template_start) / 0.38).clamp(0.0, 1.0)
+        })
+        .sum::<f32>()
+        / template.strokes.len() as f32;
+    (score * count_score(candidate.strokes.len(), template.strokes.len())).clamp(0.0, 1.0)
+}
+
+fn strict_stroke_score(candidate: &[StrokePoint], template: &[StrokePoint]) -> f32 {
+    let candidate = resample(candidate, 24);
+    let template = resample(template, 24);
+    let distance_score = (1.0 - average_distance(&candidate, &template) / 0.43).clamp(0.0, 1.0);
+    let endpoint_score = endpoint_score(&candidate, &template);
+    (distance_score * 0.80 + endpoint_score * 0.20).clamp(0.0, 1.0)
+}
+
+fn endpoint_score(candidate: &[StrokePoint], template: &[StrokePoint]) -> f32 {
+    let Some(candidate_start) = candidate.first() else {
+        return 0.0;
+    };
+    let Some(candidate_end) = candidate.last() else {
+        return 0.0;
+    };
+    let Some(template_start) = template.first() else {
+        return 0.0;
+    };
+    let Some(template_end) = template.last() else {
+        return 0.0;
+    };
+    let error = (distance(*candidate_start, *template_start)
+        + distance(*candidate_end, *template_end))
+        * 0.5;
+    (1.0 - error / 0.42).clamp(0.0, 1.0)
+}
+
+fn count_score(candidate_count: usize, template_count: usize) -> f32 {
+    let missing =
+        template_count.saturating_sub(candidate_count) as f32 / template_count.max(1) as f32;
+    let extra =
+        candidate_count.saturating_sub(template_count) as f32 / template_count.max(1) as f32;
+    (1.0 - missing * 0.50 - extra * 0.32).clamp(0.10, 1.0)
+}
+
+fn ratio_score(candidate: f32, template: f32) -> f32 {
+    let candidate = candidate.max(0.001);
+    let template = template.max(0.001);
+    (1.0 - (candidate / template).ln().abs() / 1.60).clamp(0.0, 1.0)
+}
+
+fn resample(points: &[StrokePoint], target_count: usize) -> Vec<StrokePoint> {
+    if points.len() <= 1 {
+        return points.to_vec();
+    }
+    let total = stroke_length(points);
+    if total <= 0.0001 {
+        return vec![points[0]; target_count];
+    }
+    (0..target_count)
+        .map(|index| {
+            let target = total * index as f32 / (target_count.saturating_sub(1)).max(1) as f32;
+            point_at_distance(points, target)
+        })
+        .collect()
+}
+
+fn point_at_distance(points: &[StrokePoint], target: f32) -> StrokePoint {
+    let mut walked = 0.0;
+    for segment in points.windows(2) {
+        let start = segment[0];
+        let end = segment[1];
+        let length = distance(start, end);
+        if walked + length >= target {
+            let t = ((target - walked) / length.max(0.0001)).clamp(0.0, 1.0);
+            return StrokePoint::new(
+                start.x + (end.x - start.x) * t,
+                start.y + (end.y - start.y) * t,
+            );
+        }
+        walked += length;
+    }
+    *points.last().unwrap_or(&StrokePoint::new(0.5, 0.5))
+}
+
+fn stroke_length(points: &[StrokePoint]) -> f32 {
+    points
+        .windows(2)
+        .map(|segment| distance(segment[0], segment[1]))
+        .sum()
+}
+
+fn average_distance(a: &[StrokePoint], b: &[StrokePoint]) -> f32 {
+    let count = a.len().min(b.len()).max(1);
+    a.iter()
+        .zip(b.iter())
+        .take(count)
+        .map(|(a, b)| distance(*a, *b))
+        .sum::<f32>()
+        / count as f32
+}
+
+fn distance(a: StrokePoint, b: StrokePoint) -> f32 {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
+    (dx * dx + dy * dy).sqrt()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::GameData;
+
+    #[test]
+    fn circle_reads_with_wrong_start_but_scores_lower() {
+        let data = GameData::load().unwrap();
+        let canonical = template_strokes_for_rune("sphere").unwrap();
+        let wrong_start = circle_starting_right();
+
+        let canonical_read = recognize_rune(&canonical, rank_one(&data)).unwrap();
+        let wrong_read = recognize_rune(&wrong_start, rank_one(&data)).unwrap();
+
+        assert_eq!(wrong_read.rune_id, "sphere");
+        assert!(wrong_read.accepted, "{wrong_read:?}");
+        assert!(
+            canonical_read.quality > wrong_read.quality + 0.08,
+            "canonical={canonical_read:?} wrong={wrong_read:?}"
+        );
+    }
+
+    #[test]
+    fn practice_report_rewards_canonical_start_and_order() {
+        let data = GameData::load().unwrap();
+        let strokes = template_strokes_for_rune("light").unwrap();
+
+        let report = practice_report_for_rune("light", &strokes, rank_one(&data)).unwrap();
+
+        assert!(report.accepted, "{report:?}");
+        assert!(report.quality > 0.92, "{report:?}");
+        assert!(report.start_score > 0.92, "{report:?}");
+        assert!(report.stroke_order_score > 0.92, "{report:?}");
+    }
+
+    fn rank_one(data: &GameData) -> Vec<&RuneDef> {
+        data.runes.iter().filter(|rune| rune.tier == 1).collect()
+    }
+
+    fn circle_starting_right() -> Vec<DrawnStroke> {
+        let mut points = Vec::new();
+        for index in 0..=24 {
+            let angle = std::f32::consts::TAU * index as f32 / 24.0;
+            points.push(StrokePoint::new(
+                0.50 + 0.34 * angle.cos(),
+                0.50 + 0.34 * angle.sin(),
+            ));
+        }
+        vec![DrawnStroke { points }]
+    }
+}

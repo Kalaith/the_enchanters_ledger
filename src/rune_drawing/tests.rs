@@ -1,0 +1,75 @@
+use super::*;
+use crate::data::GameData;
+
+fn unlocked_rank_one(data: &GameData) -> Vec<&RuneDef> {
+    data.runes.iter().filter(|rune| rune.tier == 1).collect()
+}
+
+#[test]
+fn clean_template_recognizes_the_expected_rune() {
+    let data = GameData::load().unwrap();
+    let strokes = template_strokes_for_rune("light").unwrap();
+
+    let result = recognize_rune(&strokes, unlocked_rank_one(&data)).unwrap();
+
+    assert_eq!(result.rune_id, "light");
+    assert!(result.confidence > 0.90, "{result:?}");
+    assert!(result.accepted);
+}
+
+#[test]
+fn unrelated_scribble_falls_below_acceptance_threshold() {
+    let data = GameData::load().unwrap();
+    let scribble = raw(&[
+        &[(0.12, 0.18), (0.82, 0.34), (0.22, 0.50), (0.78, 0.72)],
+        &[(0.16, 0.78), (0.42, 0.22), (0.72, 0.82), (0.88, 0.28)],
+    ]);
+
+    let result = recognize_rune(&scribble, unlocked_rank_one(&data)).unwrap();
+
+    assert!(result.confidence < MIN_RECOGNITION_CONFIDENCE, "{result:?}");
+    assert!(!result.accepted);
+}
+
+#[test]
+fn simple_cross_is_not_a_light_rune() {
+    let data = GameData::load().unwrap();
+    let cross = raw(&[&[(0.50, 0.18), (0.50, 0.82)], &[(0.26, 0.50), (0.74, 0.50)]]);
+
+    let result = recognize_rune(&cross, unlocked_rank_one(&data)).unwrap();
+
+    assert!(result.confidence < MIN_RECOGNITION_CONFIDENCE, "{result:?}");
+    assert!(!result.accepted);
+}
+
+#[test]
+fn down_arrow_variant_recognizes_touch() {
+    let data = GameData::load().unwrap();
+    let down_arrow = raw(&[&[
+        (0.52, 0.14),
+        (0.52, 0.82),
+        (0.32, 0.62),
+        (0.52, 0.82),
+        (0.72, 0.62),
+    ]]);
+
+    let result = recognize_rune(&down_arrow, unlocked_rank_one(&data)).unwrap();
+
+    assert_eq!(result.rune_id, "touch", "{result:?}");
+    assert!(result.accepted, "{result:?}");
+}
+
+#[test]
+fn eraser_splits_a_stroke_without_clearing_the_whole_mark() {
+    let mut strokes = raw(&[&[(0.12, 0.50), (0.88, 0.50)]]);
+
+    let erased = erase_strokes_at(&mut strokes, StrokePoint::new(0.50, 0.50), 0.08);
+
+    assert!(erased);
+    assert_eq!(strokes.len(), 2, "{strokes:?}");
+    assert!(strokes.iter().all(|stroke| stroke.has_ink()));
+    assert!(strokes
+        .iter()
+        .flat_map(|stroke| &stroke.points)
+        .all(|point| point.distance(StrokePoint::new(0.50, 0.50)) > 0.08));
+}

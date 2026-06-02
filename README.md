@@ -1,41 +1,32 @@
-# Macroquad Toolkit Game Template
+# The Enchanter's Ledger
 
-This is a working starter crate for new Rust + Macroquad games in this workspace.
-It intentionally uses `macroquad-toolkit` heavily so new projects begin with the
-same shared patterns as the existing games.
+A Rust + Macroquad crafting game about designing magic without being able to cast it.
 
-## Toolkit Features Already Wired
+The player runs a small enchantment workshop. Customers bring practical, strange, or suspicious requests, and the player solves them by drawing enclosed rune diagrams. The game reads the hand-drawn circle, interprets the runes inside it, and turns the result into a linked working.
 
-- `AssetManager` with a texture manifest at `assets/data/texture_manifest.json`
-- `DataRegistry` and embedded JSON loading for data-driven actions
-- `save_to_slot_with_version`, `load_from_slot_with_migration`, `delete_slot`, and `get_save_slots`
-- `NotificationManager` with toolkit toast rendering
-- `VirtualUi`, `SurfaceStyle`, `TextStyle`, `GridLayout`, meters, badges, tooltips, and text fitting
-- `FlatGrid`, `FogState`, `TilePos`, line-of-sight visibility, and flood-fill reachability
-- `Camera2D` with bounds, right-mouse drag, keyboard pan, and zoom limits
-- `EventBus<UiAction>` so UI returns intents and game logic applies them
+## Core Loop
 
-The template avoids browser-incompatible filesystem access. Static data is
-embedded with `include_str!()`, runtime browser assets go through Macroquad or
-toolkit async loaders, and save data uses macroquad-toolkit persistence.
+1. Read the current commission.
+2. Check unlocked runes in the archive.
+3. Draw an enclosing circle with multiple rune marks inside it, then interpret the diagram.
+4. Test the diagram for power, stability, mana cost, safety, and accidents.
+5. Deliver the product for coins, reputation, and insight.
+6. Spend coins and insight on research to unlock more dangerous notation.
+7. Discover and record new enchantment recipes in the ledger.
 
-## Run
+## Controls
+
+- Left mouse: draw enclosed diagrams; click a rune guide entry, then click the slate to place a tracing guide.
+- Right mouse: hold on the diagram slate to erase ink; right-click an armed or selected guide rune to deselect it.
+- `T`: test the current diagram.
+- `D`: deliver the current commission.
+- `R`: research the next archive tier.
+- `N`: decline the current commission.
+- `S` / `L`: save / load.
+- `Esc`: clear the drafting page.
+
+## Validation
 
 ```powershell
-cargo run --manifest-path template/Cargo.toml
+.\publish.ps1
 ```
-
-## Test
-
-```powershell
-cargo test --manifest-path template/Cargo.toml
-```
-
-## Rename For A New Game
-
-1. Copy `template/` to your new game folder.
-2. Rename the package in `Cargo.toml`.
-3. Update `assets/data/game_config.json`.
-4. Replace `actions.json` with your game data.
-5. Add textures to `assets/data/texture_manifest.json`.
-6. Update `index.html` to load the new wasm filename.
