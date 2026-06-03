@@ -4,11 +4,11 @@ use macroquad_toolkit::assets::TextureConfig;
 use macroquad_toolkit::data_loader::{load_embedded_json, load_embedded_json_labeled};
 use serde::{Deserialize, Serialize};
 
-const GAME_CONFIG_JSON: &str = include_str!("../../assets/data/game_config.json");
-const RUNES_JSON: &str = include_str!("../../assets/data/runes.json");
-const COMMISSIONS_JSON: &str = include_str!("../../assets/data/commissions.json");
-const TALISMAN_JOBS_JSON: &str = include_str!("../../assets/data/talisman_jobs.json");
-const TEXTURE_MANIFEST_JSON: &str = include_str!("../../assets/data/texture_manifest.json");
+const GAME_CONFIG_JSON: &str = include_str!("../assets/data/game_config.json");
+const RUNES_JSON: &str = include_str!("../assets/data/runes.json");
+const COMMISSIONS_JSON: &str = include_str!("../assets/data/commissions.json");
+const TALISMAN_JOBS_JSON: &str = include_str!("../assets/data/talisman_jobs.json");
+const TEXTURE_MANIFEST_JSON: &str = include_str!("../assets/data/texture_manifest.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameConfig {
