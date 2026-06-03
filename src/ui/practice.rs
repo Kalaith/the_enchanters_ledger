@@ -158,6 +158,9 @@ fn draw_practice_slate(
             PRACTICE_INK,
         );
     }
+    if let Some(report) = ctx.practice.report {
+        draw_feedback_segments(report, page);
+    }
 
     let drawing_active = ctx.practice.active_stroke.is_some();
     let erasing = mouse_over_rect(page, mouse) && is_mouse_button_down(MouseButton::Right);
@@ -367,6 +370,22 @@ fn draw_strokes(strokes: &[DrawnStroke], rect: Rect, color: Color, thickness: f3
             let point = point_to_screen(rect, *point);
             draw_circle(point.x, point.y, thickness * 0.45, color);
         }
+    }
+}
+
+fn draw_feedback_segments(report: &RunePracticeReport, rect: Rect) {
+    if report.mismatch_segments.is_empty() {
+        return;
+    }
+    let pulse = ((get_time() as f32 * 7.5).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+    for segment in &report.mismatch_segments {
+        let from = point_to_screen(rect, segment.from);
+        let to = point_to_screen(rect, segment.to);
+        let alpha = (0.42 + pulse * 0.38) * segment.severity.clamp(0.35, 1.0);
+        let color = Color::new(0.86, 0.08, 0.05, alpha);
+        draw_line(from.x, from.y, to.x, to.y, PRACTICE_INK + 2.2, color);
+        draw_circle(from.x, from.y, 3.4, color);
+        draw_circle(to.x, to.y, 3.4, color);
     }
 }
 

@@ -60,6 +60,61 @@ fn down_arrow_variant_recognizes_touch() {
 }
 
 #[test]
+fn rough_inner_circle_prefers_sphere_over_safer() {
+    let data = GameData::load().unwrap();
+    let circle = raw(&[&[
+        (0.42, 0.18),
+        (0.66, 0.20),
+        (0.80, 0.34),
+        (0.82, 0.58),
+        (0.68, 0.76),
+        (0.44, 0.82),
+        (0.24, 0.68),
+        (0.18, 0.44),
+        (0.28, 0.26),
+        (0.42, 0.18),
+    ]]);
+
+    let result = recognize_rune(&circle, unlocked_rank_one(&data)).unwrap();
+
+    assert_eq!(result.rune_id, "sphere", "{result:?}");
+    assert!(result.accepted, "{result:?}");
+}
+
+#[test]
+fn safer_template_still_recognizes_safer() {
+    let data = GameData::load().unwrap();
+    let safer = template_strokes_for_rune("safer").unwrap();
+
+    let result = recognize_rune(&safer, unlocked_rank_one(&data)).unwrap();
+
+    assert_eq!(result.rune_id, "safer", "{result:?}");
+    assert!(result.accepted, "{result:?}");
+}
+
+#[test]
+fn closed_star_does_not_read_as_touch() {
+    let data = GameData::load().unwrap();
+    let star = raw(&[&[
+        (0.50, 0.10),
+        (0.61, 0.38),
+        (0.90, 0.38),
+        (0.66, 0.56),
+        (0.76, 0.86),
+        (0.50, 0.68),
+        (0.24, 0.86),
+        (0.34, 0.56),
+        (0.10, 0.38),
+        (0.39, 0.38),
+        (0.50, 0.10),
+    ]]);
+
+    let result = recognize_rune(&star, unlocked_rank_one(&data)).unwrap();
+
+    assert!(result.rune_id != "touch" || !result.accepted, "{result:?}");
+}
+
+#[test]
 fn eraser_splits_a_stroke_without_clearing_the_whole_mark() {
     let mut strokes = raw(&[&[(0.12, 0.50), (0.88, 0.50)]]);
 

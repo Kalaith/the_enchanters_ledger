@@ -32,42 +32,22 @@ pub const LOGICAL_HEIGHT: f32 = 720.0;
 pub struct UiSpace {
     logical_width: f32,
     logical_height: f32,
-    scale: f32,
-    offset: Vec2,
 }
 
 impl UiSpace {
     pub fn new(logical_width: f32, logical_height: f32) -> Self {
-        let scale_x = screen_width() / logical_width.max(1.0);
-        let scale_y = screen_height() / logical_height.max(1.0);
-        let scale = scale_x.min(scale_y).max(0.01);
-        let viewport_width = logical_width * scale;
-        let viewport_height = logical_height * scale;
-        let offset = vec2(
-            (screen_width() - viewport_width) * 0.5,
-            (screen_height() - viewport_height) * 0.5,
-        );
-
         Self {
             logical_width,
             logical_height,
-            scale,
-            offset,
         }
-    }
-
-    pub fn viewport(&self) -> (i32, i32, i32, i32) {
-        (
-            self.offset.x.round() as i32,
-            self.offset.y.round() as i32,
-            (self.logical_width * self.scale).round() as i32,
-            (self.logical_height * self.scale).round() as i32,
-        )
     }
 
     pub fn mouse_position(&self) -> Vec2 {
         let (screen_x, screen_y) = mouse_position();
-        (vec2(screen_x, screen_y) - self.offset) / self.scale
+        vec2(
+            screen_x * self.logical_width / screen_width().max(1.0),
+            screen_y * self.logical_height / screen_height().max(1.0),
+        )
     }
 
     pub fn is_mouse_inside(&self) -> bool {
@@ -80,15 +60,13 @@ impl UiSpace {
 }
 
 pub fn begin_ui_frame() -> UiSpace {
-    let ui = UiSpace::new(LOGICAL_WIDTH, LOGICAL_HEIGHT);
     macroquad_toolkit::ui::set_ui_text_scale_for_screen(LOGICAL_WIDTH, LOGICAL_HEIGHT, 1.45);
     macroquad::camera::set_camera(&macroquad::camera::Camera2D {
         target: vec2(LOGICAL_WIDTH * 0.5, LOGICAL_HEIGHT * 0.5),
         zoom: vec2(2.0 / LOGICAL_WIDTH, 2.0 / LOGICAL_HEIGHT),
-        viewport: Some(ui.viewport()),
         ..Default::default()
     });
-    ui
+    UiSpace::new(LOGICAL_WIDTH, LOGICAL_HEIGHT)
 }
 
 pub fn end_ui_frame() {

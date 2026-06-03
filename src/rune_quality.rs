@@ -2,7 +2,8 @@
 
 use crate::data::RuneDef;
 use crate::rune_drawing::{
-    recognize_rune, template_strokes_for_rune, DrawnStroke, StrokePoint, MIN_RECOGNITION_CONFIDENCE,
+    recognize_rune, shape_report_for_rune, template_strokes_for_rune, DrawnStroke, ShapeIssue,
+    StrokePoint, MIN_RECOGNITION_CONFIDENCE,
 };
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,14 @@ pub struct RunePracticeReport {
     pub stroke_order_score: f32,
     pub accepted: bool,
     pub feedback: String,
+    pub mismatch_segments: Vec<PracticeMismatchSegment>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PracticeMismatchSegment {
+    pub from: StrokePoint,
+    pub to: StrokePoint,
+    pub severity: f32,
 }
 
 pub fn strict_quality_for_rune(rune_id: &str, strokes: &[DrawnStroke]) -> Option<f32> {
@@ -46,9 +55,9 @@ pub fn practice_report_for_rune<'a>(
     let confidence = recognized
         .as_ref()
         .map_or(0.0, |outcome| outcome.confidence);
-    let accepted = read_rune_id.as_deref() == Some(rune_id)
-        && confidence >= MIN_RECOGNITION_CONFIDENCE
-        && quality >= 0.45;
+    let read_accepted = recognized.as_ref().is_some_and(|outcome| outcome.accepted);
+    let accepted = read_rune_id.as_deref() == Some(rune_id) && read_accepted;
+    let issue = shape_report_for_rune(rune_id, strokes).and_then(|report| report.issue);
 
     Some(RunePracticeReport {
         target_rune_id: rune_id.to_owned(),
@@ -59,12 +68,14 @@ pub fn practice_report_for_rune<'a>(
         start_score,
         stroke_order_score,
         accepted,
+        mismatch_segments: mismatch_segments_for_rune(rune_id, strokes).unwrap_or_default(),
         feedback: practice_feedback(
             accepted,
             confidence,
             shape_score,
             start_score,
             stroke_order_score,
+            issue,
         ),
     })
 }
@@ -87,7 +98,11 @@ fn practice_feedback(
     shape: f32,
     start: f32,
     order: f32,
+    issue: Option<ShapeIssue>,
 ) -> String {
+    if let Some(issue) = issue {
+        return issue.message().to_owned();
+    }
     if confidence < MIN_RECOGNITION_CONFIDENCE {
         return "The mark is not readable yet. Trace the ghost lines and keep each stroke separate."
             .to_owned();
@@ -107,6 +122,92 @@ fn practice_feedback(
         "Clean practice mark. This stroke discipline will earn better workshop results.".to_owned()
     } else {
         "Readable, but not clean enough for high-rating work yet.".to_owned()
+    }
+}
+
+fn mismatch_segments_for_rune(
+    rune_id: &str,
+    strokes: &[DrawnStroke],
+) -> Option<Vec<PracticeMismatchSegment>> {
+    let template = template_strokes_for_rune(rune_id)?;
+    let fit = DrawingFit::from_strokes(strokes)?;
+    let mut segments = Vec::new();
+
+    for (candidate, template) in strokes.iter().zip(template.iter()) {
+        if !candidate.has_ink() {
+            continue;
+        }
+        let candidate_samples = resample(&candidate.points, 36);
+        let template_samples = resample(&template.points, 36);
+        for index in 1..candidate_samples.len().min(template_samples.len()) {
+            let expected = fit.template_to_source(template_samples[index]);
+            let error = distance(candidate_samples[index], expected) / fit.span.max(0.001);
+            if error > 0.12 {
+                segments.push(PracticeMismatchSegment {
+                    from: candidate_samples[index - 1],
+                    to: candidate_samples[index],
+                    severity: ((error - 0.12) / 0.18).clamp(0.25, 1.0),
+                });
+            }
+        }
+    }
+
+    if strokes.len() > template.len() {
+        for extra in strokes.iter().skip(template.len()) {
+            for segment in extra.points.windows(2) {
+                segments.push(PracticeMismatchSegment {
+                    from: segment[0],
+                    to: segment[1],
+                    severity: 1.0,
+                });
+            }
+        }
+    }
+
+    Some(segments)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DrawingFit {
+    origin_x: f32,
+    origin_y: f32,
+    span: f32,
+}
+
+impl DrawingFit {
+    fn from_strokes(strokes: &[DrawnStroke]) -> Option<Self> {
+        let mut points = strokes
+            .iter()
+            .filter(|stroke| stroke.has_ink())
+            .flat_map(|stroke| &stroke.points);
+        let first = *points.next()?;
+        let mut min_x = first.x;
+        let mut min_y = first.y;
+        let mut max_x = first.x;
+        let mut max_y = first.y;
+        for point in points {
+            min_x = min_x.min(point.x);
+            min_y = min_y.min(point.y);
+            max_x = max_x.max(point.x);
+            max_y = max_y.max(point.y);
+        }
+        let width = (max_x - min_x).max(0.001);
+        let height = (max_y - min_y).max(0.001);
+        let span = width.max(height).max(0.06);
+        let pad_x = (span - width) * 0.5;
+        let pad_y = (span - height) * 0.5;
+        Some(Self {
+            origin_x: min_x - pad_x,
+            origin_y: min_y - pad_y,
+            span,
+        })
+    }
+
+    fn template_to_source(self, point: StrokePoint) -> StrokePoint {
+        StrokePoint::new(
+            self.origin_x + point.x * self.span,
+            self.origin_y + point.y * self.span,
+        )
     }
 }
 
@@ -351,6 +452,37 @@ mod tests {
         assert!(report.stroke_order_score > 0.92, "{report:?}");
     }
 
+    #[test]
+    fn practice_acceptance_matches_normal_recognition() {
+        let data = GameData::load().unwrap();
+        let strokes = rough_sphere();
+
+        let recognized = recognize_rune(&strokes, rank_one(&data)).unwrap();
+        let report = practice_report_for_rune("sphere", &strokes, rank_one(&data)).unwrap();
+
+        assert_eq!(recognized.rune_id, "sphere", "{recognized:?}");
+        assert_eq!(report.accepted, recognized.accepted, "{report:?}");
+    }
+
+    #[test]
+    fn practice_explains_missing_safer_sides() {
+        let data = GameData::load().unwrap();
+        let triangle = vec![DrawnStroke {
+            points: vec![
+                StrokePoint::new(0.50, 0.16),
+                StrokePoint::new(0.84, 0.78),
+                StrokePoint::new(0.16, 0.78),
+                StrokePoint::new(0.50, 0.16),
+            ],
+        }];
+
+        let report = practice_report_for_rune("safer", &triangle, rank_one(&data)).unwrap();
+
+        assert!(!report.accepted, "{report:?}");
+        assert!(report.feedback.contains("six clear sides"), "{report:?}");
+        assert!(!report.mismatch_segments.is_empty(), "{report:?}");
+    }
+
     fn rank_one(data: &GameData) -> Vec<&RuneDef> {
         data.runes.iter().filter(|rune| rune.tier == 1).collect()
     }
@@ -365,5 +497,20 @@ mod tests {
             ));
         }
         vec![DrawnStroke { points }]
+    }
+
+    fn rough_sphere() -> Vec<DrawnStroke> {
+        vec![DrawnStroke {
+            points: vec![
+                StrokePoint::new(0.50, 0.14),
+                StrokePoint::new(0.76, 0.24),
+                StrokePoint::new(0.86, 0.52),
+                StrokePoint::new(0.68, 0.80),
+                StrokePoint::new(0.38, 0.84),
+                StrokePoint::new(0.16, 0.62),
+                StrokePoint::new(0.22, 0.30),
+                StrokePoint::new(0.50, 0.14),
+            ],
+        }]
     }
 }
