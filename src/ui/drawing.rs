@@ -40,7 +40,9 @@ pub(super) fn draw_drawing_slate(
     draw_guide_templates(
         &ctx.session.board.guide_templates,
         slate,
-        ctx.session.board.last_diagram.as_ref(),
+        ctx.interpretation_feedback_active
+            .then_some(ctx.session.board.last_diagram.as_ref())
+            .flatten(),
     );
     if ctx.session.board.template_armed {
         if let Some(rune_id) = ctx.session.board.selected_rune.as_deref() {
@@ -71,19 +73,22 @@ pub(super) fn draw_drawing_slate(
             INK_THICKNESS,
         );
     }
-    if let Some(diagram) = &ctx.session.board.last_diagram {
-        draw_spell_feedback(diagram, slate);
+    if ctx.interpretation_feedback_active {
+        if let Some(diagram) = &ctx.session.board.last_diagram {
+            draw_spell_feedback(diagram, slate);
+        }
     }
 
     let drawing_active = ctx.session.board.active_stroke.is_some();
     let mouse_on_slate = mouse_over_rect(slate, mouse);
-    let template_removal_enabled = !ctx.session.board.template_armed && !drawing_active;
-    let hovered_template = if template_removal_enabled && mouse_on_slate {
+    let guide_edit_enabled =
+        ctx.guide_edit_mode && !ctx.session.board.template_armed && !drawing_active;
+    let hovered_template = if guide_edit_enabled && mouse_on_slate {
         guide_template_hit(&ctx.session.board.guide_templates, slate, mouse)
     } else {
         None
     };
-    let hovered_remove_handle = if template_removal_enabled && mouse_on_slate {
+    let hovered_remove_handle = if guide_edit_enabled && mouse_on_slate {
         guide_template_remove_handle_hit(&ctx.session.board.guide_templates, slate, mouse)
     } else {
         None
@@ -101,15 +106,24 @@ pub(super) fn draw_drawing_slate(
     }
     let remove_template_by_handle =
         hovered_remove_handle.filter(|_| is_mouse_button_pressed(MouseButton::Left));
-    let remove_template_by_right =
-        hovered_template.filter(|_| is_mouse_button_pressed(MouseButton::Right));
-    if let Some(index) = remove_template_by_handle.or(remove_template_by_right) {
+    if let Some(index) = remove_template_by_handle {
         actions.push(UiAction::RemoveRuneTemplate(index));
+    }
+    if guide_edit_enabled
+        && remove_template_by_handle.is_none()
+        && is_mouse_button_down(MouseButton::Left)
+    {
+        if let Some(index) = hovered_template {
+            actions.push(UiAction::MoveRuneTemplate(
+                index,
+                point_in_rect(slate, mouse),
+            ));
+        }
     }
     let erasing = !ctx.session.board.template_armed
         && mouse_on_slate
+        && !ctx.guide_edit_mode
         && !ctx.suppress_rune_erase
-        && remove_template_by_right.is_none()
         && is_mouse_button_down(MouseButton::Right);
     if mouse_on_slate {
         let eraser_color = if erasing {
@@ -137,6 +151,7 @@ pub(super) fn draw_drawing_slate(
     if !erasing && placing_template && is_mouse_button_pressed(MouseButton::Left) {
         actions.push(UiAction::PlaceRuneTemplate(point_in_rect(slate, mouse)));
     } else if !erasing
+        && !ctx.guide_edit_mode
         && remove_template_by_handle.is_none()
         && mouse_on_slate
         && is_mouse_button_pressed(MouseButton::Left)
@@ -164,7 +179,13 @@ pub(super) fn draw_drawing_slate(
                 .map(|id| format!("Place {} guide", ctx.data.rune_name(id)))
         })
         .flatten()
-        .unwrap_or_else(|| "Circle + inner runes".to_owned());
+        .unwrap_or_else(|| {
+            if ctx.guide_edit_mode {
+                "Guide edit: drag guides, click X to delete".to_owned()
+            } else {
+                "Circle + inner runes".to_owned()
+            }
+        });
     draw_text_block(
         &guide_label,
         controls.x,
@@ -194,8 +215,25 @@ pub(super) fn draw_drawing_slate(
         actions.push(UiAction::ClearRuneDrawing);
     }
     if virtual_button(
-        Rect::new(controls.x + 226.0, controls.y + 34.0, 82.0, 26.0),
-        "Diag Log",
+        Rect::new(controls.x + 226.0, controls.y + 34.0, 92.0, 26.0),
+        if ctx.guide_edit_mode {
+            "Ink Mode"
+        } else {
+            "Guides"
+        },
+        !drawing_active,
+        if ctx.guide_edit_mode {
+            ButtonTone::Positive
+        } else {
+            ButtonTone::Muted
+        },
+        mouse,
+    ) {
+        actions.push(UiAction::ToggleGuideEditMode);
+    }
+    if virtual_button(
+        Rect::new(controls.x + 328.0, controls.y + 34.0, 64.0, 26.0),
+        "Diag",
         !drawing_active,
         ButtonTone::Primary,
         mouse,
@@ -203,7 +241,7 @@ pub(super) fn draw_drawing_slate(
         actions.push(UiAction::CopyDiagnostics);
     }
 
-    let note_x = controls.x + 322.0;
+    let note_x = controls.x + 404.0;
     if let Some(note) = &ctx.session.board.last_interpretation_note {
         draw_text_block(
             note,
@@ -348,10 +386,11 @@ fn draw_guide_templates(
 fn draw_guide_feedback(template: &GuideTemplate, rect: Rect, read: bool) {
     let center = point_to_screen(rect, template.center);
     let radius = rect.w.min(rect.h) * template.scale * 0.42;
+    let pulse = ((get_time() as f32 * 10.0).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
     let ring = if read {
-        Color::new(0.95, 0.70, 0.18, 0.72)
+        Color::new(0.95, 0.70, 0.18, 0.52 + pulse * 0.34)
     } else {
-        Color::new(0.82, 0.16, 0.12, 0.68)
+        Color::new(0.82, 0.16, 0.12, 0.48 + pulse * 0.34)
     };
     draw_circle_lines(center.x, center.y, radius, 2.4, ring);
     draw_circle_lines(

@@ -1,5 +1,8 @@
 use crate::rune_drawing::{DrawnStroke, StrokePoint};
 
+const MAX_CLUSTER_STROKE_DISTANCE: f32 = 0.045;
+const MAX_CLUSTER_CENTER_DISTANCE: f32 = 0.09;
+
 #[derive(Debug, Clone)]
 pub(crate) struct StrokeCluster {
     pub(crate) indices: Vec<usize>,
@@ -15,12 +18,7 @@ pub(crate) fn cluster_strokes(strokes: &[(usize, DrawnStroke)]) -> Vec<StrokeClu
         };
         let mut target = None;
         for (index, cluster) in clusters.iter().enumerate() {
-            if cluster
-                .bounds
-                .expanded(0.035)
-                .intersects(&bounds.expanded(0.035))
-                || distance(cluster.bounds.center(), bounds.center()) < 0.14
-            {
+            if cluster_should_accept(&cluster.strokes, stroke) {
                 target = Some(index);
                 break;
             }
@@ -39,6 +37,19 @@ pub(crate) fn cluster_strokes(strokes: &[(usize, DrawnStroke)]) -> Vec<StrokeClu
         }
     }
     clusters
+}
+
+fn cluster_should_accept(cluster_strokes: &[DrawnStroke], stroke: &DrawnStroke) -> bool {
+    let Some(bounds) = StrokeBounds::from_stroke(stroke) else {
+        return false;
+    };
+    cluster_strokes.iter().any(|cluster_stroke| {
+        let Some(cluster_bounds) = StrokeBounds::from_stroke(cluster_stroke) else {
+            return false;
+        };
+        distance(cluster_bounds.center(), bounds.center()) <= MAX_CLUSTER_CENTER_DISTANCE
+            && stroke_distance(cluster_stroke, stroke) <= MAX_CLUSTER_STROKE_DISTANCE
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -96,22 +107,6 @@ impl StrokeBounds {
         (self.width() / circle.width().max(0.001)).max(self.height() / circle.height().max(0.001))
     }
 
-    fn expanded(self, amount: f32) -> Self {
-        Self {
-            min_x: self.min_x - amount,
-            min_y: self.min_y - amount,
-            max_x: self.max_x + amount,
-            max_y: self.max_y + amount,
-        }
-    }
-
-    fn intersects(self, other: &Self) -> bool {
-        self.min_x <= other.max_x
-            && self.max_x >= other.min_x
-            && self.min_y <= other.max_y
-            && self.max_y >= other.min_y
-    }
-
     fn include(&mut self, other: &Self) {
         self.min_x = self.min_x.min(other.min_x);
         self.min_y = self.min_y.min(other.min_y);
@@ -124,4 +119,52 @@ pub(crate) fn distance(a: StrokePoint, b: StrokePoint) -> f32 {
     let dx = a.x - b.x;
     let dy = a.y - b.y;
     (dx * dx + dy * dy).sqrt()
+}
+
+fn stroke_distance(a: &DrawnStroke, b: &DrawnStroke) -> f32 {
+    let mut best = f32::INFINITY;
+    for a_segment in a.points.windows(2) {
+        for b_segment in b.points.windows(2) {
+            best = best.min(segment_distance(
+                a_segment[0],
+                a_segment[1],
+                b_segment[0],
+                b_segment[1],
+            ));
+        }
+    }
+    best
+}
+
+fn segment_distance(a0: StrokePoint, a1: StrokePoint, b0: StrokePoint, b1: StrokePoint) -> f32 {
+    if segments_intersect(a0, a1, b0, b1) {
+        return 0.0;
+    }
+    point_segment_distance(a0, b0, b1)
+        .min(point_segment_distance(a1, b0, b1))
+        .min(point_segment_distance(b0, a0, a1))
+        .min(point_segment_distance(b1, a0, a1))
+}
+
+fn point_segment_distance(point: StrokePoint, start: StrokePoint, end: StrokePoint) -> f32 {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let length_sq = dx * dx + dy * dy;
+    if length_sq <= f32::EPSILON {
+        return distance(point, start);
+    }
+    let t = (((point.x - start.x) * dx + (point.y - start.y) * dy) / length_sq).clamp(0.0, 1.0);
+    distance(point, StrokePoint::new(start.x + dx * t, start.y + dy * t))
+}
+
+fn segments_intersect(a0: StrokePoint, a1: StrokePoint, b0: StrokePoint, b1: StrokePoint) -> bool {
+    let d1 = orientation(a0, a1, b0);
+    let d2 = orientation(a0, a1, b1);
+    let d3 = orientation(b0, b1, a0);
+    let d4 = orientation(b0, b1, a1);
+    d1 * d2 < 0.0 && d3 * d4 < 0.0
+}
+
+fn orientation(a: StrokePoint, b: StrokePoint, c: StrokePoint) -> f32 {
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
 }

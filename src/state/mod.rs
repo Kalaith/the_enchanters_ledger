@@ -249,6 +249,9 @@ impl GameSession {
             scale: 0.22,
         });
         self.board.template_armed = false;
+        self.board.last_diagram = None;
+        self.board.last_interpretation_note = None;
+        self.board.last_diagnostic_log = None;
         Ok(format!(
             "Placed {} as a tracing guide; only your ink will be scored.",
             rune.name
@@ -264,14 +267,30 @@ impl GameSession {
             return Err("That tracing guide is already gone.".to_owned());
         }
         let template = self.board.guide_templates.remove(index);
+        self.board.last_diagram = None;
+        self.board.last_interpretation_note = None;
+        self.board.last_diagnostic_log = None;
         Ok(format!(
             "Removed {} guide.",
             data.rune_name(&template.rune_id)
         ))
     }
 
+    pub fn move_guide_template(&mut self, index: usize, center: StrokePoint) -> Result<(), String> {
+        let Some(template) = self.board.guide_templates.get_mut(index) else {
+            return Err("That tracing guide is already gone.".to_owned());
+        };
+        template.center = center;
+        self.board.last_diagram = None;
+        self.board.last_interpretation_note = None;
+        self.board.last_diagnostic_log = None;
+        Ok(())
+    }
+
     pub fn start_drawing_stroke(&mut self, point: StrokePoint) {
         self.board.last_diagnostic_log = None;
+        self.board.last_diagram = None;
+        self.board.last_interpretation_note = None;
         self.board.active_stroke = Some(DrawnStroke::new(point));
     }
 
@@ -298,6 +317,8 @@ impl GameSession {
     pub fn erase_drawing_at(&mut self, point: StrokePoint, radius: f32) -> bool {
         let erased = erase_strokes_at(&mut self.board.drawing_strokes, point, radius);
         if erased {
+            self.board.last_diagram = None;
+            self.board.last_interpretation_note = None;
             self.board.last_diagnostic_log = None;
         }
         erased

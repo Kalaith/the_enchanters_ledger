@@ -99,6 +99,69 @@ fn screenshot_clear_light_and_sphere_read_together() {
 }
 
 #[test]
+fn damaged_sphere_fragment_does_not_make_neighboring_light_fail() {
+    let data = GameData::load().unwrap();
+    let mut strokes = rough_circle(0.445, 0.51, 0.205, 0.44, 36);
+    strokes.extend(template_at("light", 0.36, 0.36, 0.16));
+    strokes.push(stroke_at(
+        &[(0.16, 0.62), (0.22, 0.30), (0.50, 0.14)],
+        0.46,
+        0.45,
+        0.19,
+    ));
+    strokes.extend(template_at("continuous", 0.36, 0.66, 0.16));
+    strokes.push(stroke_at(
+        &[(0.60, 0.12), (0.36, 0.46), (0.56, 0.46), (0.38, 0.88)],
+        0.485,
+        0.42,
+        0.09,
+    ));
+
+    let interpretation = interpret_diagram(&strokes, rank_one(&data));
+    let ids = interpretation
+        .runes
+        .iter()
+        .map(|rune| rune.rune_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(ids.contains(&"light"), "{ids:?}");
+    assert!(ids.contains(&"continuous"), "{ids:?}");
+    assert!(!ids.contains(&"sphere"), "{ids:?}");
+    assert!(!ids.contains(&"spark"), "{ids:?}");
+}
+
+#[test]
+fn damaged_sphere_fragment_stays_out_of_neighboring_light_cluster() {
+    let mut indexed_strokes = template_at("light", 0.36, 0.36, 0.16)
+        .into_iter()
+        .enumerate()
+        .map(|(index, stroke)| (index + 1, stroke))
+        .collect::<Vec<_>>();
+    indexed_strokes.push((
+        5,
+        stroke_at(
+            &[(0.16, 0.62), (0.22, 0.30), (0.50, 0.14)],
+            0.46,
+            0.45,
+            0.19,
+        ),
+    ));
+
+    let clusters = cluster_strokes(&indexed_strokes);
+    let light_cluster = clusters
+        .iter()
+        .find(|cluster| cluster.indices.contains(&1))
+        .unwrap();
+
+    assert!(light_cluster.indices.contains(&4), "{clusters:?}");
+    assert!(!light_cluster.indices.contains(&5), "{clusters:?}");
+    assert!(
+        clusters.iter().any(|cluster| cluster.indices == vec![5]),
+        "{clusters:?}"
+    );
+}
+
+#[test]
 fn accepts_smaller_off_center_outer_circle() {
     let data = GameData::load().unwrap();
     let mut strokes = rough_circle(0.34, 0.42, 0.23, 0.19, 24);

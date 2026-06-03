@@ -1,7 +1,12 @@
 use super::geometry::{distance, StrokeBounds, StrokeCluster};
 use super::{InterpretedRune, MIN_DIAGRAM_RUNE_CONFIDENCE};
 use crate::data::{RuneCategory, RuneDef};
-use crate::rune_drawing::{recognize_rune, RecognitionOutcome, StrokePoint};
+use crate::rune_drawing::{
+    recognize_rune, template_strokes_for_rune, DrawnStroke, RecognitionOutcome, StrokePoint,
+};
+
+const MIN_RECOVERED_RUNE_CONFIDENCE: f32 = 0.52;
+const MIN_RUNE_SCALE_IN_CIRCLE: f32 = 0.12;
 
 pub(super) fn extract_overlapped_spheres(
     cluster: &StrokeCluster,
@@ -80,10 +85,112 @@ pub(super) fn extract_overlapped_spheres(
     true
 }
 
+pub(super) fn recover_contaminated_multi_stroke_rune(
+    cluster: &StrokeCluster,
+    available_runes: &[&RuneDef],
+    circle_bounds: StrokeBounds,
+    circle_quality: f32,
+    interpreted: &mut Vec<InterpretedRune>,
+    rejected_marks: &mut usize,
+) -> bool {
+    if cluster.strokes.len() < 3 {
+        return false;
+    }
+    let Some(recovery) = best_recovery_window(cluster, available_runes, circle_bounds) else {
+        return false;
+    };
+    push_recognized_rune(
+        recovery.recognized,
+        recovery.bounds,
+        circle_bounds,
+        circle_quality,
+        available_runes,
+        interpreted,
+        rejected_marks,
+    );
+    *rejected_marks += cluster.strokes.len().saturating_sub(recovery.stroke_count);
+    true
+}
+
+struct RecoveredWindow {
+    recognized: RecognitionOutcome,
+    bounds: StrokeBounds,
+    stroke_count: usize,
+}
+
+fn best_recovery_window(
+    cluster: &StrokeCluster,
+    available_runes: &[&RuneDef],
+    circle_bounds: StrokeBounds,
+) -> Option<RecoveredWindow> {
+    let mut best = None::<RecoveredWindow>;
+
+    for start in 0..cluster.strokes.len() {
+        for end in (start + 2)..=cluster.strokes.len() {
+            if start == 0 && end == cluster.strokes.len() {
+                continue;
+            }
+            let strokes = &cluster.strokes[start..end];
+            let Some(bounds) = StrokeBounds::from_strokes(strokes) else {
+                continue;
+            };
+            if bounds.scale_relative(circle_bounds) < MIN_RUNE_SCALE_IN_CIRCLE {
+                continue;
+            }
+            let Some(recognized) = recognize_rune(strokes, available_runes.iter().copied()) else {
+                continue;
+            };
+            if !is_recoverable_multi_stroke_rune(&recognized, strokes.len(), available_runes) {
+                continue;
+            }
+            let candidate = RecoveredWindow {
+                recognized,
+                bounds,
+                stroke_count: strokes.len(),
+            };
+            if best.as_ref().is_none_or(|current| {
+                candidate.stroke_count > current.stroke_count
+                    || (candidate.stroke_count == current.stroke_count
+                        && candidate
+                            .recognized
+                            .confidence
+                            .total_cmp(&current.recognized.confidence)
+                            .is_gt())
+            }) {
+                best = Some(candidate);
+            }
+        }
+    }
+
+    best
+}
+
+fn is_recoverable_multi_stroke_rune(
+    recognized: &RecognitionOutcome,
+    stroke_count: usize,
+    available_runes: &[&RuneDef],
+) -> bool {
+    if !recognized.accepted || recognized.confidence < MIN_RECOVERED_RUNE_CONFIDENCE {
+        return false;
+    }
+    if available_runes
+        .iter()
+        .find(|rune| rune.id == recognized.rune_id)
+        .map(|rune| rune.category)
+        != Some(RuneCategory::Effect)
+    {
+        return false;
+    }
+    let Some(template) = template_strokes_for_rune(&recognized.rune_id) else {
+        return false;
+    };
+    template.len() >= 3 && stroke_count == template.len()
+}
+
 fn remaining_stroke_groups(
     cluster: &StrokeCluster,
     removed_local_indices: &[usize],
-) -> Vec<Vec<crate::rune_drawing::DrawnStroke>> {
+) -> Vec<Vec<DrawnStroke>> {
     let mut groups = Vec::new();
     let mut current = Vec::new();
     let mut last_original_index = None;
@@ -133,6 +240,10 @@ pub(super) fn push_recognized_rune(
         .iter()
         .find(|rune| rune.id == recognized.rune_id)
         .map(|rune| rune.category);
+    if scale < MIN_RUNE_SCALE_IN_CIRCLE {
+        *rejected_marks += 1;
+        return;
+    }
     let layout = category.map_or(1.0, |category| {
         layout_quality(category, center, circle_bounds)
     });

@@ -16,7 +16,9 @@ mod tests;
 
 pub(crate) use circle::{circle_quality, is_inside_working_circle, select_working_circle};
 pub(crate) use geometry::{cluster_strokes, StrokeBounds};
-use recognition::{extract_overlapped_spheres, push_recognized_rune};
+use recognition::{
+    extract_overlapped_spheres, push_recognized_rune, recover_contaminated_multi_stroke_rune,
+};
 
 pub const MIN_CIRCLE_QUALITY: f32 = 0.32;
 pub const MIN_DIAGRAM_RUNE_CONFIDENCE: f32 = 0.32;
@@ -113,6 +115,16 @@ pub fn interpret_diagram<'a>(
     let mut rejected_marks = 0;
     for cluster in clusters {
         if extract_overlapped_spheres(
+            &cluster,
+            &available_runes,
+            circle_bounds,
+            circle_quality,
+            &mut interpreted,
+            &mut rejected_marks,
+        ) {
+            continue;
+        }
+        if recover_contaminated_multi_stroke_rune(
             &cluster,
             &available_runes,
             circle_bounds,

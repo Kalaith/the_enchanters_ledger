@@ -371,6 +371,54 @@ fn guide_templates_can_be_removed_individually() {
 }
 
 #[test]
+fn guide_templates_can_be_moved_without_touching_ink() {
+    let data = data();
+    let mut session = unlocked_session(&data);
+    session.select_rune("light", &data).unwrap();
+    session
+        .place_guide_template(StrokePoint::new(0.25, 0.50), &data)
+        .unwrap();
+    session.board.drawing_strokes = circled_diagram(&[
+        ("light", 0.26, 0.50),
+        ("sphere", 0.50, 0.50),
+        ("continuous", 0.74, 0.50),
+    ]);
+    let ink_count = session.board.drawing_strokes.len();
+    session.interpret_drawing(&data).unwrap();
+    assert!(session.board.last_diagram.is_some());
+
+    session
+        .move_guide_template(0, StrokePoint::new(0.75, 0.25))
+        .unwrap();
+
+    assert_eq!(session.board.guide_templates[0].center.x, 0.75);
+    assert_eq!(session.board.guide_templates[0].center.y, 0.25);
+    assert_eq!(session.board.drawing_strokes.len(), ink_count);
+    assert!(session.board.last_diagram.is_none());
+    assert!(session.board.last_interpretation_note.is_none());
+}
+
+#[test]
+fn starting_new_ink_clears_previous_interpretation_state() {
+    let data = data();
+    let mut session = unlocked_session(&data);
+    session.board.drawing_strokes = circled_diagram(&[
+        ("light", 0.26, 0.50),
+        ("sphere", 0.50, 0.50),
+        ("continuous", 0.74, 0.50),
+    ]);
+    session.interpret_drawing(&data).unwrap();
+    assert!(session.board.last_diagram.is_some());
+    assert!(session.board.last_interpretation_note.is_some());
+
+    session.start_drawing_stroke(StrokePoint::new(0.15, 0.15));
+
+    assert!(session.board.active_stroke.is_some());
+    assert!(session.board.last_diagram.is_none());
+    assert!(session.board.last_interpretation_note.is_none());
+}
+
+#[test]
 fn deselect_rune_cancels_armed_template_placement() {
     let data = data();
     let mut session = GameSession::new(&data.config);

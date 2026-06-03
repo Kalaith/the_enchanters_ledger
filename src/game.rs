@@ -32,6 +32,8 @@ pub struct Game {
     settings_open: bool,
     fullscreen: bool,
     suppress_rune_erase: bool,
+    guide_edit_mode: bool,
+    interpretation_feedback_until: f64,
     practice: PracticeState,
 }
 
@@ -83,6 +85,8 @@ impl Game {
             settings_open: false,
             fullscreen: false,
             suppress_rune_erase: false,
+            guide_edit_mode: false,
+            interpretation_feedback_until: 0.0,
             practice: PracticeState::default(),
         };
         game.refresh_save_state();
@@ -121,6 +125,8 @@ impl Game {
             settings_open: self.settings_open,
             fullscreen: self.fullscreen,
             suppress_rune_erase: self.suppress_rune_erase,
+            guide_edit_mode: self.guide_edit_mode,
+            interpretation_feedback_active: get_time() < self.interpretation_feedback_until,
             title_texture: &self.title_texture,
             practice: PracticeUi {
                 open: self.practice.open,
@@ -239,6 +245,8 @@ impl Game {
                 self.journal_open = false;
                 self.settings_open = false;
                 self.suppress_rune_erase = false;
+                self.guide_edit_mode = false;
+                self.interpretation_feedback_until = 0.0;
                 self.practice = PracticeState::default();
                 self.notifications.info("Started a fresh ledger.");
             }
@@ -338,41 +346,72 @@ impl Game {
             }
             UiAction::PlaceRuneTemplate(point) => {
                 match self.session.place_guide_template(point, &self.data) {
-                    Ok(msg) => self.notifications.info(msg),
+                    Ok(msg) => {
+                        self.hide_interpretation_feedback();
+                        self.notifications.info(msg);
+                    }
                     Err(err) => self.notifications.warning(err),
                 }
             }
             UiAction::RemoveRuneTemplate(index) => {
                 match self.session.remove_guide_template(index, &self.data) {
                     Ok(msg) => {
+                        self.hide_interpretation_feedback();
                         self.suppress_rune_erase = is_mouse_button_down(MouseButton::Right);
                         self.notifications.info(msg);
                     }
                     Err(err) => self.notifications.warning(err),
                 }
             }
-            UiAction::StartRuneStroke(point) => self.session.start_drawing_stroke(point),
+            UiAction::MoveRuneTemplate(index, point) => {
+                self.hide_interpretation_feedback();
+                if let Err(err) = self.session.move_guide_template(index, point) {
+                    self.notifications.warning(err);
+                }
+            }
+            UiAction::ToggleGuideEditMode => {
+                self.guide_edit_mode = !self.guide_edit_mode;
+                self.session.board.template_armed = false;
+                self.hide_interpretation_feedback();
+                let mode = if self.guide_edit_mode {
+                    "Guide edit mode: drag templates or click their X handle to delete."
+                } else {
+                    "Ink mode: right-click erases ink without deleting templates."
+                };
+                self.notifications.info(mode);
+            }
+            UiAction::StartRuneStroke(point) => {
+                self.hide_interpretation_feedback();
+                self.session.start_drawing_stroke(point);
+            }
             UiAction::ExtendRuneStroke(point) => self.session.extend_drawing_stroke(point),
             UiAction::FinishRuneStroke => self.session.finish_drawing_stroke(),
             UiAction::EraseRuneInk(point, radius) => {
+                self.hide_interpretation_feedback();
                 self.session.erase_drawing_at(point, radius);
             }
             UiAction::ClearRuneDrawing => {
+                self.hide_interpretation_feedback();
                 self.session.clear_drawing();
                 self.notifications.info("Cleared the rune slate.");
             }
             UiAction::InterpretDiagram => match self.session.interpret_drawing(&self.data) {
                 Ok(msg) => {
+                    self.show_interpretation_feedback();
                     self.notifications.info(msg);
                     if let Some(tutorial_msg) = self.session.advance_tutorial_after_interpret() {
                         self.notifications.success(tutorial_msg);
                         self.save_game();
                     }
                 }
-                Err(err) => self.notifications.warning(err),
+                Err(err) => {
+                    self.show_interpretation_feedback();
+                    self.notifications.warning(err);
+                }
             },
             UiAction::CopyDiagnostics => self.copy_diagnostics(),
             UiAction::ClearBoard => {
+                self.hide_interpretation_feedback();
                 self.session.clear_board();
                 self.notifications.info("Cleared the drafting page.");
             }
@@ -563,6 +602,16 @@ impl Game {
     fn refresh_save_state(&mut self) {
         self.save_exists = slot_exists(&self.data.config.game_name, &self.data.config.save_slot);
         self.save_slots = get_save_slots(&self.data.config.game_name);
+    }
+
+    fn show_interpretation_feedback(&mut self) {
+        if self.session.board.last_diagram.is_some() {
+            self.interpretation_feedback_until = get_time() + 2.0;
+        }
+    }
+
+    fn hide_interpretation_feedback(&mut self) {
+        self.interpretation_feedback_until = 0.0;
     }
 }
 
