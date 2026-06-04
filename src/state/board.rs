@@ -117,9 +117,7 @@ impl DesignBoard {
         self.drawing_strokes.clear();
         self.active_stroke = None;
         self.last_recognition = None;
-        self.last_diagram = None;
-        self.last_interpretation_note = None;
-        self.last_diagnostic_log = None;
+        self.clear_interpretation_feedback();
     }
 
     pub(super) fn clear_marks(&mut self) {
@@ -127,6 +125,12 @@ impl DesignBoard {
         self.links.clear();
         self.selected_node = None;
         self.link_anchor = None;
+        self.last_diagnostic_log = None;
+    }
+
+    pub(super) fn clear_interpretation_feedback(&mut self) {
+        self.last_diagram = None;
+        self.last_interpretation_note = None;
         self.last_diagnostic_log = None;
     }
 }

@@ -1,16 +1,18 @@
+use super::canvas::{
+    draw_strokes, eraser_radius_in_rect, point_in_rect, point_to_screen, ERASER_RADIUS_PIXELS,
+};
 use super::widgets::{
     brass, brass_dim, ink, mouse_over_rect, panel_dark, parchment, parchment_line, parchment_page,
     virtual_button,
 };
 use super::{UiAction, UiContext, LOGICAL_HEIGHT, LOGICAL_WIDTH};
-use crate::rune_drawing::{template_strokes_for_rune, DrawnStroke, StrokePoint};
+use crate::rune_drawing::template_strokes_for_rune;
 use crate::rune_quality::{quality_label, RunePracticeReport};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 use macroquad_toolkit::ui::RectExt;
 
 const PRACTICE_INK: f32 = 5.0;
-const ERASER_RADIUS_PIXELS: f32 = 18.0;
 
 pub(super) fn draw_practice_overlay(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
     draw_rectangle(
@@ -351,28 +353,6 @@ fn draw_section(rect: Rect, title: &str) {
     );
 }
 
-fn point_in_rect(rect: Rect, point: Vec2) -> StrokePoint {
-    StrokePoint::new((point.x - rect.x) / rect.w, (point.y - rect.y) / rect.h)
-}
-
-fn eraser_radius_in_rect(rect: Rect) -> f32 {
-    ERASER_RADIUS_PIXELS / rect.w.min(rect.h).max(1.0)
-}
-
-fn draw_strokes(strokes: &[DrawnStroke], rect: Rect, color: Color, thickness: f32) {
-    for stroke in strokes {
-        for segment in stroke.points.windows(2) {
-            let start = point_to_screen(rect, segment[0]);
-            let end = point_to_screen(rect, segment[1]);
-            draw_line(start.x, start.y, end.x, end.y, thickness, color);
-        }
-        for point in &stroke.points {
-            let point = point_to_screen(rect, *point);
-            draw_circle(point.x, point.y, thickness * 0.45, color);
-        }
-    }
-}
-
 fn draw_feedback_segments(report: &RunePracticeReport, rect: Rect) {
     if report.mismatch_segments.is_empty() {
         return;
@@ -387,8 +367,4 @@ fn draw_feedback_segments(report: &RunePracticeReport, rect: Rect) {
         draw_circle(from.x, from.y, 3.4, color);
         draw_circle(to.x, to.y, 3.4, color);
     }
-}
-
-fn point_to_screen(rect: Rect, point: StrokePoint) -> Vec2 {
-    vec2(rect.x + point.x * rect.w, rect.y + point.y * rect.h)
 }

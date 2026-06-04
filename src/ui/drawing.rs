@@ -1,14 +1,17 @@
+use super::canvas::{
+    draw_strokes, eraser_radius_in_rect, point_distance, point_in_rect, point_to_screen,
+    ERASER_RADIUS_PIXELS,
+};
 use super::widgets::{
     ink, mouse_over_rect, muted_ink, parchment_line, parchment_page, virtual_button,
 };
 use super::{UiAction, UiContext};
-use crate::rune_drawing::{template_strokes_for_rune, DrawnStroke, StrokePoint};
+use crate::rune_drawing::{template_strokes_for_rune, StrokePoint};
 use crate::state::GuideTemplate;
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 
 const INK_THICKNESS: f32 = 5.0;
-const ERASER_RADIUS_PIXELS: f32 = 18.0;
 
 pub(super) fn draw_drawing_slate(
     ctx: &UiContext<'_>,
@@ -325,14 +328,6 @@ fn draw_slate_grid(rect: Rect) {
     }
 }
 
-fn point_in_rect(rect: Rect, point: Vec2) -> StrokePoint {
-    StrokePoint::new((point.x - rect.x) / rect.w, (point.y - rect.y) / rect.h)
-}
-
-fn eraser_radius_in_rect(rect: Rect) -> f32 {
-    ERASER_RADIUS_PIXELS / rect.w.min(rect.h).max(1.0)
-}
-
 fn guide_template_hit(templates: &[GuideTemplate], rect: Rect, mouse: Vec2) -> Option<usize> {
     templates
         .iter()
@@ -487,12 +482,6 @@ fn draw_guide_template_at(
     }
 }
 
-fn point_distance(a: StrokePoint, b: StrokePoint) -> f32 {
-    let dx = a.x - b.x;
-    let dy = a.y - b.y;
-    (dx * dx + dy * dy).sqrt()
-}
-
 fn guide_point_to_screen(rect: Rect, center: StrokePoint, scale: f32, point: StrokePoint) -> Vec2 {
     let base = rect.w.min(rect.h);
     let center = point_to_screen(rect, center);
@@ -500,20 +489,6 @@ fn guide_point_to_screen(rect: Rect, center: StrokePoint, scale: f32, point: Str
         center.x + (point.x - 0.5) * scale * base,
         center.y + (point.y - 0.5) * scale * base,
     )
-}
-
-fn draw_strokes(strokes: &[DrawnStroke], rect: Rect, color: Color, thickness: f32) {
-    for stroke in strokes {
-        for segment in stroke.points.windows(2) {
-            let start = point_to_screen(rect, segment[0]);
-            let end = point_to_screen(rect, segment[1]);
-            draw_line(start.x, start.y, end.x, end.y, thickness, color);
-        }
-        for point in &stroke.points {
-            let point = point_to_screen(rect, *point);
-            draw_circle(point.x, point.y, thickness * 0.45, color);
-        }
-    }
 }
 
 fn draw_spell_feedback(diagram: &crate::rune_diagram::DiagramInterpretation, rect: Rect) {
@@ -567,8 +542,4 @@ fn draw_spell_feedback(diagram: &crate::rune_diagram::DiagramInterpretation, rec
             Color::new(color.r, color.g, color.b, color.a * 0.70),
         );
     }
-}
-
-fn point_to_screen(rect: Rect, point: StrokePoint) -> Vec2 {
-    vec2(rect.x + point.x * rect.w, rect.y + point.y * rect.h)
 }

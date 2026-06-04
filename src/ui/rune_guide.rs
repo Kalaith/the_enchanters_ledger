@@ -1,7 +1,8 @@
+use super::canvas::draw_strokes_with_point_scale;
 use super::widgets::{draw_button_plaque, parchment, virtual_button};
 use super::{UiAction, UiContext};
 use crate::data::{RuneCategory, RuneDef};
-use crate::rune_drawing::{template_strokes_for_rune, DrawnStroke, StrokePoint};
+use crate::rune_drawing::template_strokes_for_rune;
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 use macroquad_toolkit::ui::RectExt;
@@ -271,23 +272,5 @@ fn draw_rune_template_preview(
     };
     let alpha = if enabled { color.a } else { color.a * 0.65 };
     let color = Color::new(color.r, color.g, color.b, alpha);
-    draw_template_strokes(&strokes, rect, color, thickness);
-}
-
-fn draw_template_strokes(strokes: &[DrawnStroke], rect: Rect, color: Color, thickness: f32) {
-    for stroke in strokes {
-        for segment in stroke.points.windows(2) {
-            let start = template_point_to_screen(rect, segment[0]);
-            let end = template_point_to_screen(rect, segment[1]);
-            draw_line(start.x, start.y, end.x, end.y, thickness, color);
-        }
-        for point in &stroke.points {
-            let point = template_point_to_screen(rect, *point);
-            draw_circle(point.x, point.y, thickness * 0.42, color);
-        }
-    }
-}
-
-fn template_point_to_screen(rect: Rect, point: StrokePoint) -> Vec2 {
-    vec2(rect.x + point.x * rect.w, rect.y + point.y * rect.h)
+    draw_strokes_with_point_scale(&strokes, rect, color, thickness, 0.42);
 }

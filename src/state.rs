@@ -1,7 +1,7 @@
 //! Runtime state, save data, and enchantment evaluation.
 
 use crate::data::{GameConfig, GameData, RuneDef};
-use crate::rune_diagram::interpret_diagram;
+use crate::rune_diagram::{interpret_diagram, DiagramInterpretation};
 use crate::rune_drawing::{erase_strokes_at, DrawnStroke, StrokePoint};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -249,9 +249,7 @@ impl GameSession {
             scale: 0.22,
         });
         self.board.template_armed = false;
-        self.board.last_diagram = None;
-        self.board.last_interpretation_note = None;
-        self.board.last_diagnostic_log = None;
+        self.board.clear_interpretation_feedback();
         Ok(format!(
             "Placed {} as a tracing guide; only your ink will be scored.",
             rune.name
@@ -267,9 +265,7 @@ impl GameSession {
             return Err("That tracing guide is already gone.".to_owned());
         }
         let template = self.board.guide_templates.remove(index);
-        self.board.last_diagram = None;
-        self.board.last_interpretation_note = None;
-        self.board.last_diagnostic_log = None;
+        self.board.clear_interpretation_feedback();
         Ok(format!(
             "Removed {} guide.",
             data.rune_name(&template.rune_id)
@@ -281,16 +277,12 @@ impl GameSession {
             return Err("That tracing guide is already gone.".to_owned());
         };
         template.center = center;
-        self.board.last_diagram = None;
-        self.board.last_interpretation_note = None;
-        self.board.last_diagnostic_log = None;
+        self.board.clear_interpretation_feedback();
         Ok(())
     }
 
     pub fn start_drawing_stroke(&mut self, point: StrokePoint) {
-        self.board.last_diagnostic_log = None;
-        self.board.last_diagram = None;
-        self.board.last_interpretation_note = None;
+        self.board.clear_interpretation_feedback();
         self.board.active_stroke = Some(DrawnStroke::new(point));
     }
 
@@ -317,9 +309,7 @@ impl GameSession {
     pub fn erase_drawing_at(&mut self, point: StrokePoint, radius: f32) -> bool {
         let erased = erase_strokes_at(&mut self.board.drawing_strokes, point, radius);
         if erased {
-            self.board.last_diagram = None;
-            self.board.last_interpretation_note = None;
-            self.board.last_diagnostic_log = None;
+            self.board.clear_interpretation_feedback();
         }
         erased
     }
@@ -333,27 +323,52 @@ impl GameSession {
         let interpretation = interpret_diagram(&self.board.drawing_strokes, unlocked);
         self.board.last_diagram = Some(interpretation.clone());
 
+        self.ensure_interpretable(&interpretation)?;
+        self.spend_focus(1.5 + interpretation.runes.len() as f32 * 0.7)?;
+        self.apply_interpreted_runes(&interpretation);
+
+        let note = self.interpretation_note(data, &interpretation);
+        self.board.last_interpretation_note = Some(note.clone());
+        Ok(note)
+    }
+
+    pub fn clear_board(&mut self) {
+        self.board.clear_marks();
+        self.board.clear_drawing();
+        self.board.guide_templates.clear();
+        self.board.clear_interpretation_feedback();
+        self.board.last_evaluation = None;
+    }
+
+    fn ensure_interpretable(
+        &mut self,
+        interpretation: &DiagramInterpretation,
+    ) -> Result<(), String> {
         if !interpretation.circle_found {
-            self.board.last_interpretation_note =
-                Some("No enclosing circle was readable.".to_owned());
-            self.spend_focus(0.8)?;
-            return Err(
+            return self.reject_interpretation(
+                "No enclosing circle was readable.".to_owned(),
                 "The diagram needs an enclosing circle before it can hold meaning.".to_owned(),
             );
         }
         if !interpretation.accepted() {
-            self.board.last_interpretation_note = Some(format!(
-                "Circle {}%, but no inner rune was clear enough.",
-                percent(interpretation.circle_quality)
-            ));
-            self.spend_focus(0.8)?;
-            return Err(format!(
-                "The circle reads at {}%, but no inner rune is clear enough.",
-                percent(interpretation.circle_quality)
-            ));
+            let circle_percent = percent(interpretation.circle_quality);
+            return self.reject_interpretation(
+                format!("Circle {circle_percent}%, but no inner rune was clear enough."),
+                format!(
+                    "The circle reads at {circle_percent}%, but no inner rune is clear enough."
+                ),
+            );
         }
+        Ok(())
+    }
 
-        self.spend_focus(1.5 + interpretation.runes.len() as f32 * 0.7)?;
+    fn reject_interpretation(&mut self, note: String, error: String) -> Result<(), String> {
+        self.board.last_interpretation_note = Some(note);
+        self.spend_focus(0.8)?;
+        Err(error)
+    }
+
+    fn apply_interpreted_runes(&mut self, interpretation: &DiagramInterpretation) {
         let mut occupied = HashSet::new();
         let mut placed_nodes = Vec::new();
         self.board.clear_marks();
@@ -371,8 +386,13 @@ impl GameSession {
         }
         self.board.active_stroke = None;
         self.board.last_recognition = None;
-        self.board.last_diagram = Some(interpretation.clone());
+    }
 
+    fn interpretation_note(
+        &self,
+        data: &GameData,
+        interpretation: &DiagramInterpretation,
+    ) -> String {
         let names = interpretation
             .runes
             .iter()
@@ -383,7 +403,7 @@ impl GameSession {
             .runes
             .iter()
             .map(|rune| rune.rune_id.as_str())
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
         let commission = self.current_commission(data);
         let missing_required = [
             commission.required_effect.as_str(),
@@ -415,7 +435,7 @@ impl GameSession {
             .as_ref()
             .map(|spell| format!(" {}", spell.note()))
             .unwrap_or_default();
-        let note = format!(
+        format!(
             "Recognized runes: {} (circle {}%, rune quality {}%{}).{}{}",
             names,
             percent(interpretation.circle_quality),
@@ -423,19 +443,7 @@ impl GameSession {
             rejected,
             commission_fit,
             circle_spell
-        );
-        self.board.last_interpretation_note = Some(note.clone());
-        Ok(note)
-    }
-
-    pub fn clear_board(&mut self) {
-        self.board.clear_marks();
-        self.board.clear_drawing();
-        self.board.guide_templates.clear();
-        self.board.last_diagram = None;
-        self.board.last_interpretation_note = None;
-        self.board.last_diagnostic_log = None;
-        self.board.last_evaluation = None;
+        )
     }
 
     fn spend_focus(&mut self, amount: f32) -> Result<(), String> {

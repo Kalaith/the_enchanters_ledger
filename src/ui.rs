@@ -7,6 +7,7 @@ use crate::state::{GamePhase, GameSession};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 
+mod canvas;
 mod commission;
 mod drawing;
 mod journal;
