@@ -4,7 +4,7 @@
 **Language**: Rust  
 **Platform**: WebGL (WASM) + Native
 
-This document defines the coding standards for Macroquad game projects. Copy this template when starting a new game and customize as needed.
+This document defines the centrally maintained coding standards for Macroquad game projects. Keep project-local copies identical to the canonical `docs/CODE_STANDARDS.md`; put project-specific guidance in the project's README or another local documentation file instead.
 
 These standards prioritize:  
 - Readability over cleverness  
@@ -26,8 +26,6 @@ If a pattern already exists in the codebase, follow it even if you dislike it. A
 
 ### 1.3 Data-Driven Design
 All game constants, balance values, and static data should be defined in JSON files under `assets/`. Load this data at startup using Serde for easy balancing and iteration without recompiling code. Avoid hardcoding values in Rust code; reference loaded data structures instead.
-
-For WebGL compatibility, static JSON should usually be embedded with `include_str!()` and parsed with Serde. Runtime-replaceable JSON must use `macroquad::prelude::load_string(...).await` on `wasm32`.
 
 ### 1.4 No Unused Code
 - Remove unused variables, fields, and functions immediately
@@ -75,10 +73,16 @@ Each module/subdirectory owns a single conceptual domain:
 ### 2.2 File Size Guideline
 - Target: 200–400 lines per file
 - Soft limit: 600 lines
-- Hard limit: 800 lines (main.rs excepted for game loop complexity)
+- Hard limit: 800 lines for every `.rs` file
 - If a file grows beyond this, split by responsibility.
 
-### 2.3 Folder Structure
+### 2.3 Module Source Filenames
+- Use Rust's named module source filenames: `foo.rs` for `mod foo;`, and `foo/bar.rs` for `mod bar;` inside `foo.rs`.
+- Do not create new `mod.rs` files.
+- When restructuring existing modules, prefer migrating `foo/mod.rs` to `foo.rs` and keeping child modules under `foo/`.
+- Do not keep both `foo.rs` and `foo/mod.rs`; Rust treats that as an ambiguous module source.
+
+### 2.4 Folder Structure
 
 ```
 game_name/
@@ -86,22 +90,22 @@ game_name/
 ├── CODE_STANDARDS.md       # This file
 ├── src/
 │   ├── main.rs             # Entry point, game loop, screen rendering
-│   ├── data/               # Data types and loading
-│   │   ├── mod.rs          # Re-exports all data types
+│   ├── data.rs             # Data module root and re-exports
+│   ├── data/               # Data child modules
 │   │   ├── loader.rs       # JSON deserialization
 │   │   └── constants.rs    # Game constants structures
-│   ├── engine/             # Game logic services
-│   │   ├── mod.rs          # Re-exports
+│   ├── engine.rs           # Engine module root and re-exports
+│   ├── engine/             # Engine child modules
 │   │   └── game_engine.rs  # Core calculations
-│   ├── state/              # State management
-│   │   ├── mod.rs
+│   ├── state.rs            # State module root and re-exports
+│   ├── state/              # State child modules
 │   │   ├── game_state.rs   # Current game state
 │   │   └── persistence.rs  # Save/load
-│   ├── ui/                 # UI components
-│   │   ├── mod.rs
+│   ├── ui.rs               # UI module root and re-exports
+│   ├── ui/                 # UI child modules
 │   │   ├── core.rs
 │   │   └── components.rs
-│   └── screens/            # Screen renderers (optional)
+│   └── screens.rs          # Screen renderers module root (optional)
 ├── assets/                 # Game data
 │   ├── constants.json      # Balance values
 │   └── localization/       # Text strings
@@ -172,18 +176,11 @@ Game data should be:
 
 ### 5.3 Data-Driven Design
 - All game balance and configuration in JSON under `assets/`
-- Load data at application startup; data is embedded at compile time unless it must be replaceable after build
+- Load data at application startup; data is embedded at compile time
 - Use structs that mirror JSON structure for type safety
 - Never hardcode magic numbers; reference loaded config data
 
-### 5.4 Filesystem, Assets, and WebGL
-- `std::fs` is native-only. Do not use `std::fs::read_to_string`, `std::fs::read_dir`, `std::fs::write`, or path existence checks from code that compiles for `wasm32-unknown-unknown`.
-- For static JSON, use `include_str!()` plus Serde. This is the safest default for config, balance, text, and manifests.
-- For runtime browser assets, use Macroquad async APIs: `load_string(...).await`, `load_texture(...).await`, `load_file(...).await`, or macroquad-toolkit asset loaders.
-- For save files, use macroquad-toolkit persistence helpers. They use files on native builds and localStorage on WebGL builds.
-- If desktop-only filesystem access is required, put both imports and call sites behind `#[cfg(not(target_arch = "wasm32"))]` and provide a browser fallback.
-
-### 5.5 Enums for Game Phases
+### 5.4 Enums for Game Phases
 Use enums to model distinct game states:
 ```rust
 pub enum GamePhase {
@@ -235,16 +232,16 @@ pub enum UiAction {
 
 ### 7.4 Macroquad-Toolkit Usage
 
-This project uses `macroquad-toolkit` for common UI patterns. Import via `use ui::*;` which re-exports all toolkit modules.
+Use `macroquad-toolkit` for common UI patterns. Prefer `use macroquad_toolkit::prelude::*;` for common helpers, or explicit `macroquad_toolkit::ui::*` imports.
 
 **Available Modules:**
-- `ui::button()` – Standard clickable button (fires on release)
-- `ui::button_on_press()` – Button that fires on mouse down
-- `ui::button_styled()` – Button with custom styling
-- `ui::panel()` – Draws a panel with optional title
-- `ui::progress_bar()` – Progress indicator
-- `ui::colors::dark::*` – Standard dark theme colors
-- `ui::input::*` – Mouse/keyboard input helpers
+- `macroquad_toolkit::ui::button()` - Standard clickable button (fires on release)
+- `macroquad_toolkit::ui::button_on_press()` - Button that fires on mouse down
+- `macroquad_toolkit::ui::button_styled()` - Button with custom styling
+- `macroquad_toolkit::ui::panel()` - Draws a panel with optional title
+- `macroquad_toolkit::ui::progress_bar()` - Progress indicator
+- `macroquad_toolkit::colors::dark::*` - Standard dark theme colors
+- `macroquad_toolkit::input::*` - Mouse/keyboard input helpers
 
 **Button Click Semantics:**
 ```rust
@@ -271,7 +268,7 @@ draw_text("Hello", x, y, 20.0, dark::TEXT);  // Text color
 
 **Input Helpers:**
 ```rust
-use ui::input::*;
+use macroquad_toolkit::input::*;
 
 if is_hovered(x, y, w, h) { /* Mouse over area */ }
 if was_clicked(x, y, w, h) { /* Left click released on area */ }
@@ -290,17 +287,15 @@ The game must build for:
 - **Windows**: `cargo build --release`
 - **Web/WASM**: `cargo build --release --target wasm32-unknown-unknown`
 
-### 8.3 WebGL Requirements
+### 8.3 Validation
+After meaningful changes, run `.\publish.ps1` with no parameters from the affected project directory.
+
+### 8.4 WebGL Requirements
 The `index.html` must:
 - Load `mq_js_bundle.js` (Miniquad loader)
 - Call `load("game_name.wasm")`
 - Include canvas with `id="glcanvas"`
 - Use `image-rendering: pixelated` for pixel art
-
-The Rust code must also avoid unsupported browser APIs:
-- No uncfg'd `std::fs` access in startup, asset loading, saves, or cache code
-- No uncfg'd `std::time::Instant::now()`; use `macroquad::time::get_time()` or frame `dt` for WebGL timers
-- All async browser asset loads must happen before the first screen depends on the data
 
 ## 9. Comments & Documentation
 

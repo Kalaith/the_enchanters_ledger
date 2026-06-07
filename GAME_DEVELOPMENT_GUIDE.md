@@ -13,13 +13,9 @@ This guide covers both creating new games and migrating existing web application
 ### New Game Setup
 
 ```bash
-# Recommended: copy the toolkit-ready template crate.
-cp -r template my_game
+cargo new my_game
 cd my_game
 ```
-
-Then rename the package in `Cargo.toml`, update `assets/data/game_config.json`,
-and change the wasm filename in `index.html`.
 
 ### Dependencies (`Cargo.toml`)
 
@@ -48,7 +44,7 @@ serde_json = "1.0"
 | :--- | :--- | :--- |
 | **Frontend** | React/DOM/CSS | Macroquad (Canvas, Immediate UI) |
 | **Backend** | PHP/Node | Rust internal logic |
-| **Database** | MySQL | JSON files or SQLite |
+| **Database** | MySQL | JSON data or native/server DB |
 | **Styling** | CSS | Rust constants/functions |
 
 ### Tech Stack Philosophy
@@ -79,26 +75,25 @@ game_name/
 ├── src/
 │   ├── main.rs             # Entry point, window config
 │   ├── game.rs             # Game loop & state machine
-│   ├── state/              # Game states (one per screen)
-│   │   ├── mod.rs
+│   ├── state.rs            # State module root and re-exports
+│   ├── state/              # State child modules
 │   │   ├── menu.rs
 │   │   └── gameplay.rs
-│   ├── engine/             # Game logic (stateless)
-│   │   ├── mod.rs
+│   ├── engine.rs           # Engine module root and re-exports
+│   ├── engine/             # Engine child modules
 │   │   └── game_engine.rs
-│   ├── data/               # Data types & embedded toolkit loaders
-│   │   ├── mod.rs
+│   ├── data.rs             # Data module root and re-exports
+│   ├── data/               # Data child modules
 │   │   └── loader.rs
-│   ├── ui/                 # UI helpers
-│   │   └── mod.rs
+│   ├── ui.rs               # UI helpers module root
+│   └── save.rs             # Persistence
 ├── assets/
-│   ├── data/
-│   │   ├── game_config.json
-│   │   ├── actions.json
-│   │   └── texture_manifest.json
+│   ├── data.json           # Game data
 │   └── images/             # Sprites
 └── README.md
 ```
+
+Use Rust's named module source filenames: `foo.rs` for `mod foo;`, and `foo/bar.rs` for child modules declared inside `foo.rs`. Do not create new `mod.rs` files; when restructuring old modules, migrate `foo/mod.rs` to `foo.rs`.
 
 ---
 
@@ -141,7 +136,7 @@ async fn main() {
 ### State Machine Pattern
 
 ```rust
-// state/mod.rs
+// state.rs
 pub enum GameState {
     Menu(MenuState),
     Gameplay(GameplayState),
@@ -256,23 +251,6 @@ fn draw_button(x: f32, y: f32, text: &str) -> bool {
 
 ## Data Loading
 
-WebGL builds cannot read deployed `assets/` through `std::fs`. For game data,
-prefer embedded JSON with `include_str!()` when the data is static, or
-`macroquad::prelude::load_string(...).await` when the browser should fetch a
-runtime asset.
-
-Use `std::fs` only inside native-only code:
-
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-let json = std::fs::read_to_string("assets/cards.json")?;
-```
-
-Do not call `std::fs::read_to_string`, `std::fs::read_dir`,
-`std::fs::write`, or `std::time::Instant::now()` from code that compiles for
-`wasm32-unknown-unknown`. Use Macroquad asset/time APIs, embedded data, or
-macroquad-toolkit persistence instead.
-
 ### JSON Definition (`assets/cards.json`)
 
 ```json
@@ -292,8 +270,6 @@ macroquad-toolkit persistence instead.
 ```rust
 use serde::{Deserialize, Serialize};
 
-const CARDS_JSON: &str = include_str!("../../assets/cards.json");
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CardData {
     pub id: String,
@@ -304,39 +280,9 @@ pub struct CardData {
 }
 
 impl CardData {
-    pub fn load_all() -> Result<Vec<CardData>, Box<dyn std::error::Error>> {
-        let cards: Vec<CardData> = serde_json::from_str(CARDS_JSON)?;
-        Ok(cards)
+    pub async fn load_all() -> Result<Vec<CardData>, String> {
+        macroquad_toolkit::data_loader::load_json_file("assets/cards.json").await
     }
-}
-```
-
-If the data must remain replaceable after compiling, load it asynchronously:
-
-```rust
-#[cfg(target_arch = "wasm32")]
-use macroquad::prelude::load_string;
-use serde::{Deserialize, Serialize};
-
-const CARDS_JSON: &str = include_str!("../../assets/cards.json");
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CardData {
-    pub id: String,
-    pub name: String,
-}
-
-pub async fn load_cards() -> Result<Vec<CardData>, Box<dyn std::error::Error>> {
-    #[cfg(target_arch = "wasm32")]
-    let json = load_string("assets/cards.json")
-        .await
-        .unwrap_or_else(|_| CARDS_JSON.to_string());
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let json =
-        std::fs::read_to_string("assets/cards.json").unwrap_or_else(|_| CARDS_JSON.to_string());
-
-    Ok(serde_json::from_str(&json)?)
 }
 ```
 
@@ -344,75 +290,29 @@ pub async fn load_cards() -> Result<Vec<CardData>, Box<dyn std::error::Error>> {
 
 ## Persistence (Save/Load)
 
-Use `macroquad-toolkit` save slots. They write atomic JSON files on native builds
-and localStorage-compatible data on WASM builds.
+### JSON (Recommended for Save Files)
 
 ```rust
-use macroquad_toolkit::persistence::{
-    save_to_slot_with_version,
-    load_from_slot_with_migration,
-};
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct SaveData {
-    pub version: String,
-    pub points: i64,
+    pub version: u32,
+    pub progress: ProgressData,
 }
 
-let save = SaveData {
-    version: "1.0.0".to_string(),
-    points: 100,
-};
-
-save_to_slot_with_version("my_game", "autosave", &save, "1.0.0")?;
-
-let loaded: SaveData = load_from_slot_with_migration(
-    "my_game",
-    "autosave",
-    "1.0.0",
-    |old_version, value| {
-        // Convert old save JSON into the current SaveData.
-        let points = value
-            .get("data")
-            .and_then(|data| data.get("points"))
-            .or_else(|| value.get("points"))
-            .and_then(|value| value.as_i64())
-            .unwrap_or_default();
-
-        Ok(SaveData {
-            version: "1.0.0".to_string(),
-            points,
-        })
-    },
-)?;
-```
-
-### SQLite (For Complex Data)
-
-Use `rusqlite` if migrating a complex MySQL database:
-
-```rust
-use rusqlite::{Connection, Result};
-
-pub struct Database {
-    conn: Connection,
-}
-
-impl Database {
-    pub fn init() -> Result<Self> {
-        let conn = Connection::open("game_data.db")?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS player_stats (
-                id INTEGER PRIMARY KEY,
-                gold INTEGER NOT NULL
-            )",
-            (),
-        )?;
-        Ok(Self { conn })
+impl SaveData {
+    pub fn save(&self) -> Result<(), String> {
+        macroquad_toolkit::persistence::save_to_slot("my_game", "slot_1", self)
+    }
+    
+    pub fn load() -> Result<Self, String> {
+        macroquad_toolkit::persistence::load_from_slot("my_game", "slot_1")
     }
 }
 ```
+
+### Native/Server Databases
+
+Use database crates only for native/server code. Keep WebGL clients on JSON data plus toolkit persistence.
 
 ---
 
@@ -423,6 +323,14 @@ impl Database {
 Every game MUST have:
 - `publish.ps1` – Build and deploy script
 - `index.html` – WebGL host page
+
+### Validation
+
+Run this with no parameters from the affected project directory after meaningful changes:
+
+```powershell
+.\publish.ps1
+```
 
 ### Build Targets
 
@@ -500,7 +408,7 @@ Use a JSON catalog for managing placeholder-to-generated-image transitions.
 6. [ ] Set up `assets/` folder
 7. [ ] Copy `publish.ps1` from template
 8. [ ] Create `index.html` with correct WASM filename
-9. [ ] Keep or adapt the template save/load system
+9. [ ] Implement save/load system
 
 ### Migration (Web → Rust)
 
