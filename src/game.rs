@@ -57,6 +57,7 @@ impl Game {
         let mut assets = AssetManager::new();
         let placeholder = Image::gen_image_color(16, 16, Color::new(0.72, 0.55, 0.28, 1.0));
         assets.set_placeholder_texture_direct(Texture2D::from_image(&placeholder));
+        let _ = assets.load_asset_pack("assets.zip").await;
         let loaded_assets = assets.load_texture_configs(&data.texture_manifest).await;
         let title_texture = Texture2D::from_file_with_format(
             include_bytes!("../ledger_title.png"),
