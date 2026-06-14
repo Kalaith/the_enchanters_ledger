@@ -3,6 +3,7 @@ use super::{UiAction, UiContext};
 use crate::state::WorkOrderKind;
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
+use macroquad_toolkit::ui::draw_ui_text_ex;
 use macroquad_toolkit::ui::RectExt;
 
 pub(super) fn draw_commission_panel(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
@@ -43,7 +44,7 @@ pub(super) fn draw_commission_panel(ctx: &UiContext<'_>, mouse: Vec2, actions: &
     );
 
     let mut y = sheet.y + 157.0;
-    draw_text_ex(
+    draw_ui_text_ex(
         "Required notation",
         sheet.x + 16.0,
         y,
@@ -158,7 +159,7 @@ fn draw_requirement(ctx: &UiContext<'_>, x: f32, y: f32, w: f32, label: &str, id
         Rect::new(x, y, w, 23.0),
         &SurfaceStyle::new(color).with_border(1.0, parchment_line()),
     );
-    draw_text_ex(
+    draw_ui_text_ex(
         label,
         x + 9.0,
         y + 16.0,

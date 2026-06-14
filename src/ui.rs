@@ -6,6 +6,7 @@ use crate::rune_quality::RunePracticeReport;
 use crate::state::{GamePhase, GameSession};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
+use macroquad_toolkit::ui::draw_ui_text_ex;
 
 mod canvas;
 mod commission;
@@ -273,13 +274,13 @@ fn draw_header(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
     );
     draw_corner_marks(rect, Color::new(0.82, 0.62, 0.30, 0.46));
 
-    draw_text_ex(
+    draw_ui_text_ex(
         "RUNEWRIGHT",
         rect.x + 24.0,
         rect.y + 34.0,
         TextStyle::new(34.0, brass()).params(),
     );
-    draw_text_ex(
+    draw_ui_text_ex(
         &ctx.data.config.display_name,
         rect.x + 28.0,
         rect.y + 60.0,
@@ -340,7 +341,7 @@ fn draw_header_card(rect: Rect, label: &str, value: &str) {
         &SurfaceStyle::new(Color::new(0.078, 0.062, 0.043, 0.94))
             .with_border(1.0, Color::new(0.66, 0.48, 0.22, 0.48)),
     );
-    draw_text_ex(
+    draw_ui_text_ex(
         label,
         rect.x + 10.0,
         rect.y + 16.0,
@@ -381,7 +382,7 @@ fn draw_tutorial_banner(rect: Rect, prompt: &str) {
             .with_border(1.5, Color::new(0.43, 0.24, 0.08, 0.92))
             .with_inner_border(5.0, 1.0, Color::new(0.20, 0.11, 0.04, 0.15)),
     );
-    draw_text_ex(
+    draw_ui_text_ex(
         "Tutorial",
         rect.x + 14.0,
         rect.y + 21.0,

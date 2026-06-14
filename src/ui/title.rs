@@ -2,6 +2,7 @@ use super::widgets::{brass, brass_dim, draw_corner_marks, panel_dark, parchment,
 use super::{UiAction, UiContext, LOGICAL_HEIGHT, LOGICAL_WIDTH};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
+use macroquad_toolkit::ui::draw_ui_text_ex;
 
 pub(super) fn draw_title_screen(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
     draw_title_art(ctx.title_texture);
@@ -88,7 +89,7 @@ pub(super) fn draw_settings_window(ctx: &UiContext<'_>, mouse: Vec2, actions: &m
 
     let display = Rect::new(rect.x + 66.0, rect.y + 112.0, 420.0, 254.0);
     draw_settings_section(display, "Display");
-    draw_text_ex(
+    draw_ui_text_ex(
         "Fullscreen",
         display.x + 28.0,
         display.y + 72.0,
@@ -144,7 +145,7 @@ fn draw_settings_section(rect: Rect, title: &str) {
             .with_inner_border(6.0, 1.0, Color::new(0.95, 0.72, 0.32, 0.10)),
     );
     draw_corner_marks(rect, Color::new(0.84, 0.62, 0.28, 0.38));
-    draw_text_ex(
+    draw_ui_text_ex(
         title,
         rect.x + 28.0,
         rect.y + 36.0,

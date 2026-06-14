@@ -10,6 +10,7 @@ use crate::rune_drawing::{template_strokes_for_rune, StrokePoint};
 use crate::state::GuideTemplate;
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
+use macroquad_toolkit::ui::draw_ui_text_ex;
 
 const INK_THICKNESS: f32 = 5.0;
 
@@ -26,7 +27,7 @@ pub(super) fn draw_drawing_slate(
         rect.w,
         rect.bottom() - slate.bottom() - 12.0,
     );
-    draw_text_ex(
+    draw_ui_text_ex(
         "Diagram Slate",
         rect.x,
         rect.y + 16.0,

@@ -7,6 +7,7 @@ use crate::data::CommissionDef;
 use crate::state::WorkOrderKind;
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
+use macroquad_toolkit::ui::draw_ui_text_ex;
 use macroquad_toolkit::ui::RectExt;
 
 pub(super) fn draw_journal_overlay(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
@@ -105,7 +106,7 @@ fn draw_talisman_section(
             &SurfaceStyle::new(Color::new(0.078, 0.062, 0.043, 0.96))
                 .with_border(1.0, Color::new(0.58, 0.42, 0.20, 0.58)),
         );
-        draw_text_ex(
+        draw_ui_text_ex(
             &job.item,
             card.x + 12.0,
             card.y + 20.0,
@@ -165,7 +166,7 @@ fn draw_notes_section(ctx: &UiContext<'_>, rect: Rect) {
 
     for (index, entry) in ctx.session.journal.iter().rev().take(5).enumerate() {
         let y = rect.y + 50.0 + index as f32 * 70.0;
-        draw_text_ex(
+        draw_ui_text_ex(
             &format!("Day {} - {}", entry.day, entry.title),
             rect.x + 16.0,
             y,
@@ -251,7 +252,7 @@ fn draw_requirement(ctx: &UiContext<'_>, x: f32, y: f32, w: f32, label: &str, id
         })
         .with_border(1.0, parchment_line()),
     );
-    draw_text_ex(
+    draw_ui_text_ex(
         label,
         x + 8.0,
         y + 16.0,

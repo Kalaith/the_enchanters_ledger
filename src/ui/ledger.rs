@@ -5,6 +5,7 @@ use super::{UiAction, UiContext, LOGICAL_WIDTH};
 use crate::state::GameSession;
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
+use macroquad_toolkit::ui::draw_ui_text_ex;
 
 pub(super) fn draw_ledger_panel(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
     let rect = Rect::new(10.0, 612.0, LOGICAL_WIDTH - 20.0, 104.0);
@@ -78,7 +79,7 @@ pub(super) fn draw_ledger_panel(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut 
 }
 
 fn draw_last_result(session: &GameSession, rect: Rect) {
-    draw_text_ex(
+    draw_ui_text_ex(
         "Last Test",
         rect.x,
         rect.y + 15.0,
@@ -120,7 +121,7 @@ fn draw_last_result(session: &GameSession, rect: Rect) {
 }
 
 fn draw_discoveries(session: &GameSession, rect: Rect) {
-    draw_text_ex(
+    draw_ui_text_ex(
         &format!("Discoveries ({})", session.discoveries.len()),
         rect.x,
         rect.y + 15.0,

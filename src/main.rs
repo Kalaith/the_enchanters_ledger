@@ -15,8 +15,6 @@ mod ui;
 
 use game::Game;
 
-const UI_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Rajdhani-SemiBold.ttf");
-
 fn window_conf() -> Conf {
     Conf {
         window_title: "The Enchanter's Ledger".to_owned(),
@@ -30,8 +28,7 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    macroquad_toolkit::ui::set_default_ui_font_from_bytes(UI_FONT_BYTES)
-        .expect("embedded UI font should load");
+    macroquad_toolkit::ui::ensure_default_ui_font().expect("toolkit UI font should load");
     macroquad_toolkit::ui::set_min_ui_font_size(16.0);
 
     let mut game = Game::new().await;

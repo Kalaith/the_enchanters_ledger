@@ -10,6 +10,7 @@ use crate::rune_drawing::template_strokes_for_rune;
 use crate::rune_quality::{quality_label, RunePracticeReport};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
+use macroquad_toolkit::ui::draw_ui_text_ex;
 use macroquad_toolkit::ui::RectExt;
 
 const PRACTICE_INK: f32 = 5.0;
@@ -272,7 +273,7 @@ fn draw_feedback(report: Option<&RunePracticeReport>, rect: Rect, ctx: &UiContex
 }
 
 fn draw_score_bar(x: f32, y: f32, w: f32, label: &str, score: f32) {
-    draw_text_ex(label, x, y, TextStyle::new(13.0, parchment()).params());
+    draw_ui_text_ex(label, x, y, TextStyle::new(13.0, parchment()).params());
     let bar = Rect::new(x, y + 8.0, w, 14.0);
     draw_surface(
         bar,
