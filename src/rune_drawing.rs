@@ -3,6 +3,8 @@
 use crate::data::RuneDef;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+pub(crate) mod samples;
 mod scoring;
 mod shape;
 mod templates;
@@ -15,6 +17,8 @@ pub use templates::template_strokes_for_rune;
 use templates::template_variants_for_rune;
 
 pub const MIN_RECOGNITION_CONFIDENCE: f32 = 0.32;
+pub const MIN_RECOGNITION_MARGIN: f32 = 0.04;
+const AMBIGUOUS_ACCEPTANCE_CONFIDENCE: f32 = 0.58;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct StrokePoint {
@@ -102,10 +106,23 @@ pub fn erase_strokes_at(strokes: &mut Vec<DrawnStroke>, center: StrokePoint, rad
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecognitionCandidate {
+    pub rune_id: String,
+    pub confidence: f32,
+    pub quality: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecognitionOutcome {
     pub rune_id: String,
     pub confidence: f32,
     pub quality: f32,
+    #[serde(default)]
+    pub score_gap: f32,
+    #[serde(default)]
+    pub ambiguous: bool,
+    #[serde(default)]
+    pub alternatives: Vec<RecognitionCandidate>,
     pub accepted: bool,
 }
 
@@ -130,20 +147,43 @@ pub fn recognize_rune<'a>(
         .collect::<Vec<_>>();
     scores.sort_by(|a, b| b.1.total_cmp(&a.1));
     let (rune_id, mut confidence, mut quality) = scores.first().cloned()?;
+    let raw_confidence = confidence;
+    let alternatives = scores
+        .iter()
+        .skip(1)
+        .take(3)
+        .map(|(rune_id, confidence, quality)| RecognitionCandidate {
+            rune_id: rune_id.clone(),
+            confidence: *confidence,
+            quality: *quality,
+        })
+        .collect::<Vec<_>>();
+    let score_gap = alternatives
+        .first()
+        .map_or(raw_confidence, |candidate| {
+            raw_confidence - candidate.confidence
+        })
+        .max(0.0);
+    let ambiguous = score_gap < MIN_RECOGNITION_MARGIN;
     if let Some((_, second, _)) = scores.get(1) {
         let gap = confidence - *second;
-        if gap < 0.04 {
+        if gap < MIN_RECOGNITION_MARGIN {
             confidence *= 0.92;
             quality *= 0.96;
         }
     }
     quality = quality.clamp(0.0, 1.0);
+    let accepted = confidence >= MIN_RECOGNITION_CONFIDENCE
+        && (!ambiguous || confidence >= AMBIGUOUS_ACCEPTANCE_CONFIDENCE);
 
     Some(RecognitionOutcome {
         rune_id,
         confidence,
         quality,
-        accepted: confidence >= MIN_RECOGNITION_CONFIDENCE,
+        score_gap,
+        ambiguous,
+        alternatives,
+        accepted,
     })
 }
 

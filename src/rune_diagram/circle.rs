@@ -22,6 +22,30 @@ pub(crate) fn select_working_circle(
         })
 }
 
+pub(crate) fn select_working_circle_for_strokes(
+    candidates: &[(usize, f32, StrokeBounds)],
+    useful: &[(usize, &DrawnStroke)],
+) -> Option<(usize, f32, StrokeBounds)> {
+    let contextual = candidates
+        .iter()
+        .map(|candidate| (*candidate, enclosed_ink_count(*candidate, useful)))
+        .filter(|(_, enclosed)| *enclosed > 0)
+        .max_by(|(a, a_enclosed), (b, b_enclosed)| {
+            let a_valid = (a.1 >= MIN_CIRCLE_QUALITY) as u8;
+            let b_valid = (b.1 >= MIN_CIRCLE_QUALITY) as u8;
+            let a_span = a.2.width().max(a.2.height());
+            let b_span = b.2.width().max(b.2.height());
+            a_valid
+                .cmp(&b_valid)
+                .then_with(|| a_enclosed.cmp(b_enclosed))
+                .then_with(|| a_span.total_cmp(&b_span))
+                .then_with(|| a.1.total_cmp(&b.1))
+        })
+        .map(|(candidate, _)| candidate);
+
+    contextual.or_else(|| select_working_circle(candidates))
+}
+
 pub(crate) fn circle_quality(stroke: &DrawnStroke, bounds: StrokeBounds) -> Option<f32> {
     if stroke.points.len() < 8 {
         return None;
@@ -63,6 +87,18 @@ pub(crate) fn is_inside_working_circle(stroke: &DrawnStroke, circle_bounds: Stro
     nx * nx + ny * ny <= 1.25
         && bounds.width() < circle_bounds.width() * 0.92
         && bounds.height() < circle_bounds.height() * 0.92
+}
+
+fn enclosed_ink_count(
+    candidate: (usize, f32, StrokeBounds),
+    useful: &[(usize, &DrawnStroke)],
+) -> usize {
+    useful
+        .iter()
+        .filter(|(index, stroke)| {
+            *index != candidate.0 && is_inside_working_circle(stroke, candidate.2)
+        })
+        .count()
 }
 
 fn circle_start_score(start: StrokePoint, center: StrokePoint, bounds: StrokeBounds) -> f32 {

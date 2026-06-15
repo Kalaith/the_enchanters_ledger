@@ -30,3 +30,10 @@ The player runs a small enchantment workshop. Customers bring practical, strange
 ```powershell
 .\publish.ps1
 ```
+# Practical Future Improvements
+
+- Add parser tests for rune interpretation, malformed glyphs, enclosure detection, and invalid diagram recovery.
+- Move commission delivery, testing results, accident chances, and research unlocks into pure reducers with accounting tests.
+- Add recipe-discovery fixtures that verify ledger entries, reputation, coins, insight, and archive tier progression together.
+- Separate drawing input capture from enchantment evaluation so slate rendering cannot alter commission logic.
+

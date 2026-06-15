@@ -14,7 +14,9 @@ mod recognition;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use circle::{circle_quality, is_inside_working_circle, select_working_circle};
+pub(crate) use circle::{
+    circle_quality, is_inside_working_circle, select_working_circle_for_strokes,
+};
 pub(crate) use geometry::{cluster_strokes, StrokeBounds};
 use recognition::{
     extract_overlapped_spheres, push_recognized_rune, recover_contaminated_multi_stroke_rune,
@@ -77,7 +79,7 @@ pub fn interpret_diagram<'a>(
         })
         .collect::<Vec<_>>();
     let Some((circle_index, circle_quality, circle_bounds)) =
-        select_working_circle(&circle_candidates)
+        select_working_circle_for_strokes(&circle_candidates, &useful)
     else {
         return DiagramInterpretation {
             circle_found: false,

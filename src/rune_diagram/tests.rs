@@ -1,5 +1,6 @@
 use super::*;
 use crate::data::GameData;
+use crate::rune_drawing::samples;
 use crate::rune_drawing::template_strokes_for_rune;
 
 fn rank_one(data: &GameData) -> Vec<&RuneDef> {
@@ -8,6 +9,32 @@ fn rank_one(data: &GameData) -> Vec<&RuneDef> {
 
 fn all_runes(data: &GameData) -> Vec<&RuneDef> {
     data.runes.iter().collect()
+}
+
+#[test]
+fn structural_rune_sample_set_reads_inside_full_diagrams() {
+    let data = GameData::load().unwrap();
+
+    for sample in samples::structural_rune_samples() {
+        let strokes = samples::circled_sample(&sample, 0.50, 0.50, 0.17);
+        let interpretation = interpret_diagram(&strokes, all_runes(&data));
+        let ids = interpretation
+            .runes
+            .iter()
+            .map(|rune| rune.rune_id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            interpretation.accepted(),
+            "sample={} interpretation={interpretation:?}",
+            sample.name
+        );
+        assert!(
+            ids.contains(&sample.rune_id),
+            "sample={} ids={ids:?} interpretation={interpretation:?}",
+            sample.name
+        );
+    }
 }
 
 #[test]

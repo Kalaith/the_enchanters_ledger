@@ -20,12 +20,16 @@ pub(super) fn extract_overlapped_spheres(
         return false;
     }
 
-    let whole = recognize_rune(&cluster.strokes, available_runes.iter().copied());
-    if whole
-        .as_ref()
-        .is_some_and(|recognized| recognized.accepted && recognized.rune_id == "healing")
-    {
-        return false;
+    if let Some(recognized) = recognize_rune(&cluster.strokes, available_runes.iter().copied()) {
+        let category = available_runes
+            .iter()
+            .find(|rune| rune.id == recognized.rune_id)
+            .map(|rune| rune.category);
+        if recognized.accepted
+            && (recognized.rune_id == "healing" || category != Some(RuneCategory::Effect))
+        {
+            return false;
+        }
     }
 
     let mut sphere_indices = Vec::new();
@@ -94,6 +98,11 @@ pub(super) fn recover_contaminated_multi_stroke_rune(
     rejected_marks: &mut usize,
 ) -> bool {
     if cluster.strokes.len() < 3 {
+        return false;
+    }
+    if recognize_rune(&cluster.strokes, available_runes.iter().copied())
+        .is_some_and(|recognized| recognized.accepted)
+    {
         return false;
     }
     let Some(recovery) = best_recovery_window(cluster, available_runes, circle_bounds) else {

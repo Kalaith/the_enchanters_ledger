@@ -10,6 +10,11 @@ pub(crate) enum ShapeIssue {
     NotStraightEnough,
     ShouldBeOpen,
     MissingArrowStructure,
+    MissingBeamStructure,
+    MissingAuraStructure,
+    MissingBurstStructure,
+    MissingConeStructure,
+    MissingDiamondStructure,
 }
 
 impl ShapeIssue {
@@ -23,6 +28,17 @@ impl ShapeIssue {
             ShapeIssue::NotStraightEnough => "The straight rune lines need to be cleaner.",
             ShapeIssue::ShouldBeOpen => "Touch should be an open arrow, not a closed shape.",
             ShapeIssue::MissingArrowStructure => "Touch needs a clear shaft and arrow head.",
+            ShapeIssue::MissingBeamStructure => {
+                "Beam needs a clear right-pointing shaft and arrow head."
+            }
+            ShapeIssue::MissingAuraStructure => {
+                "Aura needs a closed outer shape with a clear center bar."
+            }
+            ShapeIssue::MissingBurstStructure => {
+                "Burst needs straight rays crossing through the center."
+            }
+            ShapeIssue::MissingConeStructure => "Cone needs a closed triangular outline.",
+            ShapeIssue::MissingDiamondStructure => "Force needs a closed diamond outline.",
         }
     }
 }
@@ -42,6 +58,11 @@ pub(crate) fn shape_report_for_rune(
         "sphere" => Some(sphere_report(&ink)),
         "safer" => Some(safer_report(&ink)),
         "touch" => Some(touch_report(&ink)),
+        "beam" => Some(beam_report(&ink)),
+        "aura" => Some(aura_report(&ink)),
+        "burst" => Some(burst_report(&ink)),
+        "cone" => Some(cone_report(&ink)),
+        "force" => Some(diamond_report(&ink)),
         _ => None,
     }
 }
@@ -68,6 +89,160 @@ fn sphere_report(ink: &NormalizedInk) -> RuneShapeReport {
         Some(ShapeIssue::NotRoundEnough)
     } else if corners >= 7 && circular < 0.82 {
         Some(ShapeIssue::TooManyStraightLines)
+    } else {
+        None
+    };
+    RuneShapeReport {
+        structural_score,
+        issue,
+    }
+}
+
+fn beam_report(ink: &NormalizedInk) -> RuneShapeReport {
+    let any_closed = ink
+        .strokes
+        .iter()
+        .any(|stroke| closure_score(stroke) > 0.72);
+    if any_closed {
+        return RuneShapeReport {
+            structural_score: 0.18,
+            issue: Some(ShapeIssue::ShouldBeOpen),
+        };
+    }
+
+    let directness = average_directness(ink);
+    let rightward = rightward_arrow_score(ink);
+    let stroke_count_score = if (1..=3).contains(&ink.strokes.len()) {
+        1.0
+    } else {
+        0.45
+    };
+    let structural_score =
+        (directness * 0.38 + rightward * 0.42 + stroke_count_score * 0.20).clamp(0.0, 1.0);
+    let issue = if rightward < 0.50 {
+        Some(ShapeIssue::MissingBeamStructure)
+    } else if directness < 0.54 {
+        Some(ShapeIssue::NotStraightEnough)
+    } else {
+        None
+    };
+    RuneShapeReport {
+        structural_score,
+        issue,
+    }
+}
+
+fn aura_report(ink: &NormalizedInk) -> RuneShapeReport {
+    if ink.strokes.len() < 2 {
+        return RuneShapeReport {
+            structural_score: 0.32,
+            issue: Some(ShapeIssue::MissingAuraStructure),
+        };
+    }
+
+    let closed_stroke = ink
+        .strokes
+        .iter()
+        .enumerate()
+        .max_by(|(_, a), (_, b)| closure_score(a).total_cmp(&closure_score(b)));
+    let Some((outline_index, outline)) = closed_stroke else {
+        return RuneShapeReport {
+            structural_score: 0.20,
+            issue: Some(ShapeIssue::MissingAuraStructure),
+        };
+    };
+    let closed = closure_score(outline);
+    let corners = corner_count(outline);
+    let side_score = (1.0 - (corners as f32 - 6.0).abs() / 4.0).clamp(0.0, 1.0);
+    let bar = ink
+        .strokes
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != outline_index)
+        .map(|(_, stroke)| horizontal_center_bar_score(stroke))
+        .fold(0.0, f32::max);
+    let structural_score =
+        (closed * 0.26 + side_score * 0.24 + bar * 0.36 + count_score(ink.strokes.len(), 2) * 0.14)
+            .clamp(0.0, 1.0);
+    let issue = if closed < 0.70 {
+        Some(ShapeIssue::NotClosed)
+    } else if bar < 0.48 {
+        Some(ShapeIssue::MissingAuraStructure)
+    } else {
+        None
+    };
+    RuneShapeReport {
+        structural_score,
+        issue,
+    }
+}
+
+fn burst_report(ink: &NormalizedInk) -> RuneShapeReport {
+    let directness = average_directness(ink);
+    let angle_score = burst_angle_score(ink);
+    let center_score = burst_center_score(ink);
+    let count = count_score(ink.strokes.len(), 4);
+    let structural_score =
+        (directness * 0.30 + angle_score * 0.30 + center_score * 0.25 + count * 0.15)
+            .clamp(0.0, 1.0);
+    let issue = if center_score < 0.48 || angle_score < 0.50 {
+        Some(ShapeIssue::MissingBurstStructure)
+    } else if directness < 0.54 {
+        Some(ShapeIssue::NotStraightEnough)
+    } else {
+        None
+    };
+    RuneShapeReport {
+        structural_score,
+        issue,
+    }
+}
+
+fn cone_report(ink: &NormalizedInk) -> RuneShapeReport {
+    let Some(stroke) = ink.single_stroke() else {
+        return RuneShapeReport {
+            structural_score: 0.30,
+            issue: Some(ShapeIssue::MissingConeStructure),
+        };
+    };
+    let closed = closure_score(stroke);
+    let corners = corner_count(stroke);
+    let side_score = (1.0 - (corners as f32 - 3.0).abs() / 3.0).clamp(0.0, 1.0);
+    let straight = straight_section_score(stroke);
+    let structural_score = (closed * 0.28 + side_score * 0.42 + straight * 0.30).clamp(0.0, 1.0);
+    let issue = if closed < 0.70 {
+        Some(ShapeIssue::NotClosed)
+    } else if corners < 3 || side_score < 0.50 {
+        Some(ShapeIssue::MissingConeStructure)
+    } else if straight < 0.54 {
+        Some(ShapeIssue::NotStraightEnough)
+    } else {
+        None
+    };
+    RuneShapeReport {
+        structural_score,
+        issue,
+    }
+}
+
+fn diamond_report(ink: &NormalizedInk) -> RuneShapeReport {
+    let Some(stroke) = ink.single_stroke() else {
+        return RuneShapeReport {
+            structural_score: 0.30,
+            issue: Some(ShapeIssue::MissingDiamondStructure),
+        };
+    };
+    let closed = closure_score(stroke);
+    let corners = corner_count(stroke);
+    let side_score = (1.0 - (corners as f32 - 4.0).abs() / 3.0).clamp(0.0, 1.0);
+    let straight = straight_section_score(stroke);
+    let structural_score = (closed * 0.26 + side_score * 0.44 + straight * 0.30).clamp(0.0, 1.0);
+    let issue = if closed < 0.70 {
+        Some(ShapeIssue::NotClosed)
+    } else if corners < 4 || side_score < 0.55 {
+        Some(ShapeIssue::MissingDiamondStructure)
+    } else if straight < 0.54 {
+        Some(ShapeIssue::NotStraightEnough)
     } else {
         None
     };
@@ -289,6 +464,146 @@ fn touch_downward_score(ink: &NormalizedInk) -> f32 {
         .filter(|point| point.y < min_y + vertical_span * 0.25)
         .count();
     ((bottom_points as f32 * 0.22) + (top_points as f32 * 0.10)).clamp(0.0, 1.0)
+}
+
+fn average_directness(ink: &NormalizedInk) -> f32 {
+    ink.strokes
+        .iter()
+        .map(|stroke| stroke_directness(stroke))
+        .sum::<f32>()
+        / ink.strokes.len().max(1) as f32
+}
+
+fn rightward_arrow_score(ink: &NormalizedInk) -> f32 {
+    let points = all_points(ink);
+    if points.is_empty() {
+        return 0.0;
+    }
+    let bounds = point_bounds(&points);
+    let width = (bounds.2 - bounds.0).max(0.001);
+    let height = (bounds.3 - bounds.1).max(0.001);
+    let axis_score = (width / (width + height)).clamp(0.0, 1.0);
+    let mid_y = bounds.1 + height * 0.5;
+    let tip = points
+        .iter()
+        .max_by(|a, b| a.x.total_cmp(&b.x))
+        .copied()
+        .unwrap_or(StrokePoint::new(0.5, 0.5));
+    let tip_score = (1.0 - (tip.y - mid_y).abs() / (height * 0.72).max(0.001)).clamp(0.0, 1.0);
+    let head_points = points
+        .iter()
+        .filter(|point| point.x > bounds.0 + width * 0.58)
+        .copied()
+        .collect::<Vec<_>>();
+    let head_spread = if head_points.len() >= 2 {
+        let head_bounds = point_bounds(&head_points);
+        ((head_bounds.3 - head_bounds.1) / height.max(0.001)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let horizontal_line = ink
+        .strokes
+        .iter()
+        .map(|stroke| horizontal_center_bar_score(stroke))
+        .fold(0.0, f32::max);
+    (axis_score * 0.30 + tip_score * 0.24 + head_spread * 0.24 + horizontal_line * 0.22)
+        .clamp(0.0, 1.0)
+}
+
+fn horizontal_center_bar_score(stroke: &[StrokePoint]) -> f32 {
+    if stroke.len() < 2 {
+        return 0.0;
+    }
+    let bounds = point_bounds(stroke);
+    let width = (bounds.2 - bounds.0).max(0.001);
+    let height = (bounds.3 - bounds.1).max(0.001);
+    let horizontal = (width / (width + height)).clamp(0.0, 1.0);
+    let mean_y = stroke.iter().map(|point| point.y).sum::<f32>() / stroke.len() as f32;
+    let center = (1.0 - (mean_y - 0.5).abs() / 0.34).clamp(0.0, 1.0);
+    let length = (width / 0.34).clamp(0.0, 1.0);
+    (stroke_directness(stroke) * 0.32 + horizontal * 0.30 + center * 0.20 + length * 0.18)
+        .clamp(0.0, 1.0)
+}
+
+fn burst_angle_score(ink: &NormalizedInk) -> f32 {
+    let mut bins = [false; 4];
+    for stroke in &ink.strokes {
+        let Some(start) = stroke.first() else {
+            continue;
+        };
+        let Some(end) = stroke.last() else {
+            continue;
+        };
+        let mut angle = (end.y - start.y).atan2(end.x - start.x);
+        while angle < 0.0 {
+            angle += std::f32::consts::PI;
+        }
+        while angle >= std::f32::consts::PI {
+            angle -= std::f32::consts::PI;
+        }
+        let bin = ((angle / std::f32::consts::PI) * bins.len() as f32).round() as usize;
+        bins[bin % bins.len()] = true;
+    }
+    bins.iter().filter(|filled| **filled).count() as f32 / bins.len() as f32
+}
+
+fn burst_center_score(ink: &NormalizedInk) -> f32 {
+    let center = StrokePoint::new(0.5, 0.5);
+    ink.strokes
+        .iter()
+        .filter_map(|stroke| {
+            let start = stroke.first().copied()?;
+            let end = stroke.last().copied()?;
+            let error = point_segment_distance(center, start, end);
+            Some((1.0 - error / 0.20).clamp(0.0, 1.0))
+        })
+        .sum::<f32>()
+        / ink.strokes.len().max(1) as f32
+}
+
+fn count_score(candidate_count: usize, template_count: usize) -> f32 {
+    let missing =
+        template_count.saturating_sub(candidate_count) as f32 / template_count.max(1) as f32;
+    let extra =
+        candidate_count.saturating_sub(template_count) as f32 / template_count.max(1) as f32;
+    (1.0 - missing * 0.50 - extra * 0.24).clamp(0.10, 1.0)
+}
+
+fn all_points(ink: &NormalizedInk) -> Vec<StrokePoint> {
+    ink.strokes
+        .iter()
+        .flat_map(|stroke| stroke.iter().copied())
+        .collect()
+}
+
+fn point_bounds(points: &[StrokePoint]) -> (f32, f32, f32, f32) {
+    points.iter().fold(
+        (
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ),
+        |bounds, point| {
+            (
+                bounds.0.min(point.x),
+                bounds.1.min(point.y),
+                bounds.2.max(point.x),
+                bounds.3.max(point.y),
+            )
+        },
+    )
+}
+
+fn point_segment_distance(point: StrokePoint, start: StrokePoint, end: StrokePoint) -> f32 {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let length_sq = dx * dx + dy * dy;
+    if length_sq <= f32::EPSILON {
+        return point.distance(start);
+    }
+    let t = (((point.x - start.x) * dx + (point.y - start.y) * dy) / length_sq).clamp(0.0, 1.0);
+    point.distance(StrokePoint::new(start.x + dx * t, start.y + dy * t))
 }
 
 fn closure_score(points: &[StrokePoint]) -> f32 {

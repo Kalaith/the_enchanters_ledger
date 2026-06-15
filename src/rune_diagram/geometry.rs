@@ -11,45 +11,79 @@ pub(crate) struct StrokeCluster {
 }
 
 pub(crate) fn cluster_strokes(strokes: &[(usize, DrawnStroke)]) -> Vec<StrokeCluster> {
-    let mut clusters = Vec::<StrokeCluster>::new();
-    for (stroke_index, stroke) in strokes {
-        let Some(bounds) = StrokeBounds::from_stroke(stroke) else {
-            continue;
-        };
-        let mut target = None;
-        for (index, cluster) in clusters.iter().enumerate() {
-            if cluster_should_accept(&cluster.strokes, stroke) {
-                target = Some(index);
-                break;
+    let items = strokes
+        .iter()
+        .filter_map(|(index, stroke)| {
+            StrokeBounds::from_stroke(stroke).map(|bounds| (*index, stroke.clone(), bounds))
+        })
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    let mut edges = vec![Vec::<usize>::new(); items.len()];
+    for left in 0..items.len() {
+        for right in (left + 1)..items.len() {
+            if strokes_should_cluster(
+                &items[left].1,
+                items[left].2,
+                &items[right].1,
+                items[right].2,
+            ) {
+                edges[left].push(right);
+                edges[right].push(left);
             }
         }
-
-        if let Some(index) = target {
-            clusters[index].bounds.include(&bounds);
-            clusters[index].strokes.push(stroke.clone());
-            clusters[index].indices.push(*stroke_index);
-        } else {
-            clusters.push(StrokeCluster {
-                indices: vec![*stroke_index],
-                strokes: vec![stroke.clone()],
-                bounds,
-            });
-        }
     }
+
+    let mut visited = vec![false; items.len()];
+    let mut clusters = Vec::<StrokeCluster>::new();
+    for start in 0..items.len() {
+        if visited[start] {
+            continue;
+        }
+        let mut stack = vec![start];
+        let mut component = Vec::new();
+        visited[start] = true;
+        while let Some(index) = stack.pop() {
+            component.push(index);
+            for neighbor in &edges[index] {
+                if !visited[*neighbor] {
+                    visited[*neighbor] = true;
+                    stack.push(*neighbor);
+                }
+            }
+        }
+        component.sort_by_key(|index| items[*index].0);
+
+        let first = component[0];
+        let mut bounds = items[first].2;
+        let mut indices = Vec::with_capacity(component.len());
+        let mut cluster_strokes = Vec::with_capacity(component.len());
+        for item_index in component {
+            bounds.include(&items[item_index].2);
+            indices.push(items[item_index].0);
+            cluster_strokes.push(items[item_index].1.clone());
+        }
+        clusters.push(StrokeCluster {
+            indices,
+            strokes: cluster_strokes,
+            bounds,
+        });
+    }
+
+    clusters.sort_by_key(|cluster| cluster.indices.first().copied().unwrap_or(usize::MAX));
     clusters
 }
 
-fn cluster_should_accept(cluster_strokes: &[DrawnStroke], stroke: &DrawnStroke) -> bool {
-    let Some(bounds) = StrokeBounds::from_stroke(stroke) else {
-        return false;
-    };
-    cluster_strokes.iter().any(|cluster_stroke| {
-        let Some(cluster_bounds) = StrokeBounds::from_stroke(cluster_stroke) else {
-            return false;
-        };
-        distance(cluster_bounds.center(), bounds.center()) <= MAX_CLUSTER_CENTER_DISTANCE
-            && stroke_distance(cluster_stroke, stroke) <= MAX_CLUSTER_STROKE_DISTANCE
-    })
+fn strokes_should_cluster(
+    a: &DrawnStroke,
+    a_bounds: StrokeBounds,
+    b: &DrawnStroke,
+    b_bounds: StrokeBounds,
+) -> bool {
+    distance(a_bounds.center(), b_bounds.center()) <= MAX_CLUSTER_CENTER_DISTANCE
+        && stroke_distance(a, b) <= MAX_CLUSTER_STROKE_DISTANCE
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -5,6 +5,57 @@ fn unlocked_rank_one(data: &GameData) -> Vec<&RuneDef> {
     data.runes.iter().filter(|rune| rune.tier == 1).collect()
 }
 
+fn all_runes(data: &GameData) -> Vec<&RuneDef> {
+    data.runes.iter().collect()
+}
+
+#[test]
+fn structural_rune_sample_set_recognizes_expected_runes() {
+    let data = GameData::load().unwrap();
+
+    for sample in samples::structural_rune_samples() {
+        let result = recognize_rune(&sample.strokes, all_runes(&data)).unwrap();
+
+        assert_eq!(
+            result.rune_id, sample.rune_id,
+            "sample={} result={result:?}",
+            sample.name
+        );
+        assert!(result.accepted, "sample={} result={result:?}", sample.name);
+        assert!(
+            result.quality >= 0.44,
+            "sample={} result={result:?}",
+            sample.name
+        );
+    }
+}
+
+#[test]
+fn ambiguous_shape_samples_report_alternatives() {
+    let data = GameData::load().unwrap();
+
+    for sample in samples::ambiguous_shape_samples() {
+        let result = recognize_rune(&sample.strokes, all_runes(&data)).unwrap();
+
+        assert!(
+            !result.alternatives.is_empty(),
+            "sample={} result={result:?}",
+            sample.name
+        );
+        assert!(
+            result.score_gap >= 0.0,
+            "sample={} result={result:?}",
+            sample.name
+        );
+        assert_eq!(
+            result.ambiguous,
+            result.score_gap < MIN_RECOGNITION_MARGIN,
+            "sample={} result={result:?}",
+            sample.name
+        );
+    }
+}
+
 #[test]
 fn clean_template_recognizes_the_expected_rune() {
     let data = GameData::load().unwrap();

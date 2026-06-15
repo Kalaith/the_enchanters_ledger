@@ -4,7 +4,7 @@ use crate::data::{GameData, RuneDef};
 use crate::magical_circle::{classify_circle_stroke, CircleBounds};
 use crate::rune_diagram::{
     circle_quality, cluster_strokes, interpret_diagram, is_circle_structure,
-    is_inside_working_circle, select_working_circle, StrokeBounds, MIN_CIRCLE_QUALITY,
+    is_inside_working_circle, select_working_circle_for_strokes, StrokeBounds, MIN_CIRCLE_QUALITY,
     MIN_DIAGRAM_RUNE_CONFIDENCE,
 };
 use crate::rune_drawing::{recognize_rune, DrawnStroke};
@@ -102,7 +102,7 @@ pub fn diagnose_diagram<'a>(
     }
 
     let Some((circle_index, circle_score, circle_bounds)) =
-        select_working_circle(&circle_candidates)
+        select_working_circle_for_strokes(&circle_candidates, &useful)
     else {
         writeln!(log, "\nselected circle: none").ok();
         write_stroke_guesses(&mut log, &useful, &available_runes);
@@ -262,12 +262,32 @@ fn write_guess(
         } else {
             "below threshold"
         };
+        let ambiguity = if guess.ambiguous {
+            format!(" ambiguous gap={}", pct(guess.score_gap))
+        } else {
+            format!(" gap={}", pct(guess.score_gap))
+        };
+        let alternatives = if guess.alternatives.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " alternatives=[{}]",
+                guess
+                    .alternatives
+                    .iter()
+                    .map(|candidate| format!("{}:{}", candidate.rune_id, pct(candidate.confidence)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         writeln!(
             log,
-            "{label}: best={} confidence={} quality={} {status}",
+            "{label}: best={} confidence={} quality={}{}{} {status}",
             guess.rune_id,
             pct(guess.confidence),
-            pct(guess.quality)
+            pct(guess.quality),
+            ambiguity,
+            alternatives
         )
         .ok();
     } else {

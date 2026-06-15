@@ -89,6 +89,16 @@ pub(super) fn adjusted_score_for_rune(
                 .map_or(1.0, |report| report.structural_score);
             score * (0.36 + structure * 0.64)
         }
+        "force" => {
+            let structure = shape_report_for_rune(rune_id, source_strokes)
+                .map_or(1.0, |report| report.structural_score);
+            score * (0.30 + structure * 0.70)
+        }
+        "beam" | "aura" | "burst" | "cone" => {
+            let structure = shape_report_for_rune(rune_id, source_strokes)
+                .map_or(1.0, |report| report.structural_score);
+            score * (0.42 + structure * 0.58)
+        }
         _ => score,
     }
 }
