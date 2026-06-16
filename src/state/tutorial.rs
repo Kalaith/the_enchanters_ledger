@@ -3,18 +3,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum TutorialStage {
     FirstEffect,
     FirstShape,
     FirstTrigger,
     ResearchHint,
+    #[default]
     Complete,
-}
-
-impl Default for TutorialStage {
-    fn default() -> Self {
-        Self::Complete
-    }
 }
 
 impl TutorialStage {

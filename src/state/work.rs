@@ -119,9 +119,7 @@ impl GameSession {
 
         let customer = story.customer.clone();
         let locked = self.locked_requirement_names(story, data).join(" + ");
-        let Some(job_index) = self.first_available_talisman_index(data) else {
-            return None;
-        };
+        let job_index = self.first_available_talisman_index(data)?;
         let item = data.talisman_job(job_index).item.clone();
         self.player.active_work = WorkOrderKind::Talisman;
         self.player.current_talisman = job_index;

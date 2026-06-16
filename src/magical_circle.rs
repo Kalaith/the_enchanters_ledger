@@ -194,11 +194,11 @@ pub fn classify_circle_stroke(stroke: &DrawnStroke, circle: CircleBounds) -> Opt
     })
 }
 
-pub fn analyze_magical_circle<'a>(
+pub fn analyze_magical_circle(
     circle_quality: f32,
     marks: &[CircleMark],
     runes: &[InterpretedRune],
-    rune_defs: &[&'a RuneDef],
+    rune_defs: &[&RuneDef],
 ) -> Option<MagicalCircleSpell> {
     let ring_count = count_kind(marks, CircleStrokeKind::ReinforcementRing);
     let satellite_count = count_kind(marks, CircleStrokeKind::SatelliteSeal);
