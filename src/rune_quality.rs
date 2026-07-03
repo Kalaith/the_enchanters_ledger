@@ -2,8 +2,9 @@
 
 use crate::data::RuneDef;
 use crate::rune_drawing::{
-    merge_continuation_strokes, recognize_rune, shape_report_for_rune, template_strokes_for_rune,
-    template_variants_for_rune, DrawnStroke, ShapeIssue, StrokePoint, MIN_RECOGNITION_CONFIDENCE,
+    merge_continuation_strokes, recognize_rune, shape_report_for_rune, stroke_assignment,
+    template_strokes_for_rune, template_variants_for_rune, DrawnStroke, ShapeIssue, StrokePoint,
+    MIN_RECOGNITION_CONFIDENCE,
 };
 
 #[derive(Debug, Clone)]
@@ -148,22 +149,46 @@ fn practice_feedback(
     }
 }
 
+/// Highlights where a drawing deviates from its rune's template. Pairs
+/// drawn strokes to template strokes using the same order-insensitive
+/// assignment identity scoring uses (`stroke_assignment`), rather than
+/// zipping in input order — otherwise a rune drawn in a different (but
+/// still legal, since identity is order-insensitive) stroke order would
+/// get its mismatch highlights compared against the wrong template stroke.
 fn mismatch_segments_for_rune(
     rune_id: &str,
     strokes: &[DrawnStroke],
 ) -> Option<Vec<PracticeMismatchSegment>> {
     let template = template_strokes_for_rune(rune_id)?;
     let fit = DrawingFit::from_strokes(strokes)?;
+    // Templates are stored at their own natural slate position (e.g. "light"
+    // only spans x 0.25..0.75), not pre-normalized to a unit box, so map
+    // each template point into its own unit box first, then into the
+    // drawing's frame — otherwise a perfect, unshuffled copy of the
+    // template would still get flagged as a mismatch (D3 follow-up).
+    let template_fit = DrawingFit::from_strokes(&template)?;
     let mut segments = Vec::new();
 
-    for (candidate, template) in strokes.iter().zip(template.iter()) {
-        if !candidate.has_ink() {
+    let inked_strokes: Vec<&DrawnStroke> = strokes.iter().filter(|s| s.has_ink()).collect();
+    let candidate_points: Vec<Vec<StrokePoint>> = inked_strokes
+        .iter()
+        .map(|stroke| stroke.points.clone())
+        .collect();
+    let template_points: Vec<Vec<StrokePoint>> =
+        template.iter().map(|stroke| stroke.points.clone()).collect();
+    let assignment = stroke_assignment(&candidate_points, &template_points);
+
+    let mut matched = vec![false; inked_strokes.len()];
+    for (template_stroke, (candidate_index, _)) in template.iter().zip(assignment.iter()) {
+        let Some(candidate_index) = *candidate_index else {
             continue;
-        }
+        };
+        matched[candidate_index] = true;
+        let candidate = inked_strokes[candidate_index];
         let candidate_samples = resample(&candidate.points, 36);
-        let template_samples = resample(&template.points, 36);
+        let template_samples = resample(&template_stroke.points, 36);
         for index in 1..candidate_samples.len().min(template_samples.len()) {
-            let expected = fit.template_to_source(template_samples[index]);
+            let expected = fit.unit_to_source(template_fit.source_to_unit(template_samples[index]));
             let error = distance(candidate_samples[index], expected) / fit.span.max(0.001);
             if error > 0.12 {
                 segments.push(PracticeMismatchSegment {
@@ -175,15 +200,16 @@ fn mismatch_segments_for_rune(
         }
     }
 
-    if strokes.len() > template.len() {
-        for extra in strokes.iter().skip(template.len()) {
-            for segment in extra.points.windows(2) {
-                segments.push(PracticeMismatchSegment {
-                    from: segment[0],
-                    to: segment[1],
-                    severity: 1.0,
-                });
-            }
+    for (index, candidate) in inked_strokes.iter().enumerate() {
+        if matched[index] {
+            continue;
+        }
+        for segment in candidate.points.windows(2) {
+            segments.push(PracticeMismatchSegment {
+                from: segment[0],
+                to: segment[1],
+                severity: 1.0,
+            });
         }
     }
 
@@ -226,10 +252,17 @@ impl DrawingFit {
         })
     }
 
-    fn template_to_source(self, point: StrokePoint) -> StrokePoint {
+    fn unit_to_source(self, point: StrokePoint) -> StrokePoint {
         StrokePoint::new(
             self.origin_x + point.x * self.span,
             self.origin_y + point.y * self.span,
+        )
+    }
+
+    fn source_to_unit(self, point: StrokePoint) -> StrokePoint {
+        StrokePoint::new(
+            (point.x - self.origin_x) / self.span.max(0.0001),
+            (point.y - self.origin_y) / self.span.max(0.0001),
         )
     }
 }
@@ -473,6 +506,34 @@ mod tests {
         assert!(report.quality > 0.92, "{report:?}");
         assert!(report.start_score > 0.92, "{report:?}");
         assert!(report.stroke_order_score > 0.92, "{report:?}");
+    }
+
+    #[test]
+    fn canonical_template_draws_no_mismatch_segments() {
+        let data = GameData::load().unwrap();
+        let strokes = template_strokes_for_rune("light").unwrap();
+
+        let report = practice_report_for_rune("light", &strokes, rank_one(&data)).unwrap();
+
+        assert!(
+            report.mismatch_segments.is_empty(),
+            "a perfect copy of the template should never be flagged: {report:?}"
+        );
+    }
+
+    #[test]
+    fn reordered_strokes_do_not_produce_spurious_mismatches() {
+        let data = GameData::load().unwrap();
+        let mut shuffled = template_strokes_for_rune("light").unwrap();
+        shuffled.reverse();
+
+        let report = practice_report_for_rune("light", &shuffled, rank_one(&data)).unwrap();
+
+        assert!(report.accepted, "{report:?}");
+        assert!(
+            report.mismatch_segments.is_empty(),
+            "reordered-but-perfect strokes should not flag mismatches: {report:?}"
+        );
     }
 
     #[test]

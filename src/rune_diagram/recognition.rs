@@ -1,4 +1,4 @@
-use super::geometry::{distance, StrokeBounds, StrokeCluster};
+use super::geometry::{StrokeBounds, StrokeCluster};
 use super::{InterpretedRune, MIN_DIAGRAM_RUNE_CONFIDENCE};
 use crate::data::{RuneCategory, RuneDef};
 use crate::rune_drawing::{
@@ -12,7 +12,6 @@ pub(super) fn extract_overlapped_spheres(
     cluster: &StrokeCluster,
     available_runes: &[&RuneDef],
     circle_bounds: StrokeBounds,
-    circle_quality: f32,
     interpreted: &mut Vec<InterpretedRune>,
     rejected_marks: &mut usize,
 ) -> bool {
@@ -48,7 +47,6 @@ pub(super) fn extract_overlapped_spheres(
                 recognized,
                 bounds,
                 circle_bounds,
-                circle_quality,
                 available_runes,
                 interpreted,
                 rejected_marks,
@@ -76,7 +74,6 @@ pub(super) fn extract_overlapped_spheres(
                 recognized,
                 bounds,
                 circle_bounds,
-                circle_quality,
                 available_runes,
                 interpreted,
                 rejected_marks,
@@ -93,7 +90,6 @@ pub(super) fn recover_contaminated_multi_stroke_rune(
     cluster: &StrokeCluster,
     available_runes: &[&RuneDef],
     circle_bounds: StrokeBounds,
-    circle_quality: f32,
     interpreted: &mut Vec<InterpretedRune>,
     rejected_marks: &mut usize,
 ) -> bool {
@@ -112,7 +108,6 @@ pub(super) fn recover_contaminated_multi_stroke_rune(
         recovery.recognized,
         recovery.bounds,
         circle_bounds,
-        circle_quality,
         available_runes,
         interpreted,
         rejected_marks,
@@ -230,10 +225,9 @@ fn remaining_stroke_groups(
 }
 
 pub(super) fn push_recognized_rune(
-    mut recognized: RecognitionOutcome,
+    recognized: RecognitionOutcome,
     bounds: StrokeBounds,
     circle_bounds: StrokeBounds,
-    circle_quality: f32,
     available_runes: &[&RuneDef],
     interpreted: &mut Vec<InterpretedRune>,
     rejected_marks: &mut usize,
@@ -253,37 +247,50 @@ pub(super) fn push_recognized_rune(
         *rejected_marks += 1;
         return;
     }
-    let layout = category.map_or(1.0, |category| {
-        layout_quality(category, center, circle_bounds)
-    });
-    recognized.quality = (recognized.quality * circle_quality * layout).clamp(0.20, 1.0);
+    // D1/D2: this rune's *shape* quality is no longer multiplied by circle
+    // quality or board-position layout here — that stacked three
+    // independently-meaningful scores into one opaque number (plan issue
+    // D2). Circle quality now contributes once, additively, in
+    // `evaluate()` (prd.md §5.4); layout position bias is deleted for
+    // freehand scoring (plan issue D1) rather than silently kept.
+    let potency = potency_for_rune(category, scale, recognized.ink_ratio);
     interpreted.push(InterpretedRune {
         rune_id: recognized.rune_id,
         confidence: recognized.confidence,
-        quality: recognized.quality,
+        quality: recognized.quality.clamp(0.0, 1.0),
         center,
         scale,
         orbit,
+        potency,
     });
 }
 
-fn layout_quality(category: RuneCategory, center: StrokePoint, circle_bounds: StrokeBounds) -> f32 {
-    let relative = relative_to_circle(center, circle_bounds);
-    let target = match category {
-        RuneCategory::Effect => StrokePoint::new(0.30, 0.50),
-        RuneCategory::Shape => StrokePoint::new(0.50, 0.50),
-        RuneCategory::Trigger => StrokePoint::new(0.70, 0.50),
-        RuneCategory::Modifier => StrokePoint::new(0.50, 0.72),
-    };
-    let score = (1.0 - distance(relative, target) / 0.48).clamp(0.0, 1.0);
-    (0.76 + score * 0.24).clamp(0.0, 1.0)
+/// Magnitude channel (plan Phase 2 item 1): how strongly this rune's size
+/// and stroke completeness scale its effect, independent of shape quality
+/// (which keeps its existing role elsewhere). 1.0 at a category's
+/// reference size (`RuneCategory::ideal_scale_in_circle`) drawn with a
+/// fully-traced stroke.
+fn potency_for_rune(category: Option<RuneCategory>, scale: f32, ink_ratio: f32) -> f32 {
+    let ideal = category.map_or(0.15, RuneCategory::ideal_scale_in_circle);
+    let scale_ratio = scale / ideal.max(0.001);
+    let from_scale = potency_from_scale_ratio(scale_ratio);
+    // Under-drawn ink pulls potency down before it breaks identity; extra
+    // ink beyond the template's length earns no bonus.
+    let ink_factor = ink_ratio.clamp(0.5, 1.0);
+    (from_scale * ink_factor).clamp(0.35, 2.2)
 }
 
-fn relative_to_circle(center: StrokePoint, circle_bounds: StrokeBounds) -> StrokePoint {
-    StrokePoint::new(
-        (center.x - circle_bounds.min_x) / circle_bounds.width().max(0.001),
-        (center.y - circle_bounds.min_y) / circle_bounds.height().max(0.001),
-    )
+/// Piecewise-linear through (0.5x reference size -> 0.6 potency), (1.0x ->
+/// 1.0), (2.0x -> 1.6) — the documented curve from the plan. Each
+/// segment's slope continues past those anchor points rather than
+/// flattening immediately; `potency_for_rune` applies the final hard
+/// clamp.
+fn potency_from_scale_ratio(ratio: f32) -> f32 {
+    if ratio < 1.0 {
+        1.0 + (ratio - 1.0) * 0.8
+    } else {
+        1.0 + (ratio - 1.0) * 0.6
+    }
 }
 
 fn normalized_orbit(center: StrokePoint, circle_bounds: StrokeBounds) -> f32 {

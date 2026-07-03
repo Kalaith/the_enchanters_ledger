@@ -77,8 +77,8 @@ fn sphere_report(ink: &NormalizedInk) -> RuneShapeReport {
     let closed = closure_score(stroke);
     let circular = circularity(stroke, ink.aspect_ratio);
     let corners = corner_count(stroke);
-    let corner_penalty = if corners >= 6 {
-        (corners as f32 - 5.0) * 0.06
+    let corner_penalty = if corners >= 6.0 {
+        (corners - 5.0) * 0.06
     } else {
         0.0
     };
@@ -87,7 +87,7 @@ fn sphere_report(ink: &NormalizedInk) -> RuneShapeReport {
         Some(ShapeIssue::NotClosed)
     } else if circular < 0.66 {
         Some(ShapeIssue::NotRoundEnough)
-    } else if corners >= 7 && circular < 0.82 {
+    } else if corners >= 7.0 && circular < 0.82 {
         Some(ShapeIssue::TooManyStraightLines)
     } else {
         None
@@ -144,7 +144,11 @@ fn aura_report(ink: &NormalizedInk) -> RuneShapeReport {
         .strokes
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| closure_score(a).total_cmp(&closure_score(b)));
+        .max_by(|(a_index, a), (b_index, b)| {
+            closure_score(a)
+                .total_cmp(&closure_score(b))
+                .then_with(|| b_index.cmp(a_index))
+        });
     let Some((outline_index, outline)) = closed_stroke else {
         return RuneShapeReport {
             structural_score: 0.20,
@@ -153,7 +157,7 @@ fn aura_report(ink: &NormalizedInk) -> RuneShapeReport {
     };
     let closed = closure_score(outline);
     let corners = corner_count(outline);
-    let side_score = (1.0 - (corners as f32 - 6.0).abs() / 4.0).clamp(0.0, 1.0);
+    let side_score = (1.0 - (corners - 6.0).abs() / 4.0).clamp(0.0, 1.0);
     let bar = ink
         .strokes
         .iter()
@@ -207,12 +211,12 @@ fn cone_report(ink: &NormalizedInk) -> RuneShapeReport {
     };
     let closed = closure_score(stroke);
     let corners = corner_count(stroke);
-    let side_score = (1.0 - (corners as f32 - 3.0).abs() / 3.0).clamp(0.0, 1.0);
+    let side_score = (1.0 - (corners - 3.0).abs() / 3.0).clamp(0.0, 1.0);
     let straight = straight_section_score(stroke);
     let structural_score = (closed * 0.28 + side_score * 0.42 + straight * 0.30).clamp(0.0, 1.0);
     let issue = if closed < 0.70 {
         Some(ShapeIssue::NotClosed)
-    } else if corners < 3 || side_score < 0.50 {
+    } else if corners < 3.0 || side_score < 0.50 {
         Some(ShapeIssue::MissingConeStructure)
     } else if straight < 0.54 {
         Some(ShapeIssue::NotStraightEnough)
@@ -234,12 +238,12 @@ fn diamond_report(ink: &NormalizedInk) -> RuneShapeReport {
     };
     let closed = closure_score(stroke);
     let corners = corner_count(stroke);
-    let side_score = (1.0 - (corners as f32 - 4.0).abs() / 3.0).clamp(0.0, 1.0);
+    let side_score = (1.0 - (corners - 4.0).abs() / 3.0).clamp(0.0, 1.0);
     let straight = straight_section_score(stroke);
     let structural_score = (closed * 0.26 + side_score * 0.44 + straight * 0.30).clamp(0.0, 1.0);
     let issue = if closed < 0.70 {
         Some(ShapeIssue::NotClosed)
-    } else if corners < 4 || side_score < 0.55 {
+    } else if corners < 4.0 || side_score < 0.55 {
         Some(ShapeIssue::MissingDiamondStructure)
     } else if straight < 0.54 {
         Some(ShapeIssue::NotStraightEnough)
@@ -261,14 +265,14 @@ fn safer_report(ink: &NormalizedInk) -> RuneShapeReport {
     };
     let closed = closure_score(stroke);
     let corners = corner_count(stroke);
-    let side_score = (1.0 - (corners as f32 - 6.0).abs() / 4.0).clamp(0.0, 1.0);
+    let side_score = (1.0 - (corners - 6.0).abs() / 4.0).clamp(0.0, 1.0);
     let straight = straight_section_score(stroke);
     let structural_score = (closed * 0.24 + side_score * 0.46 + straight * 0.30).clamp(0.0, 1.0);
     let issue = if closed < 0.70 {
         Some(ShapeIssue::NotClosed)
-    } else if corners < 5 {
+    } else if corners < 5.0 {
         Some(ShapeIssue::NotEnoughSides)
-    } else if corners > 8 {
+    } else if corners > 8.0 {
         Some(ShapeIssue::TooManySides)
     } else if straight < 0.54 {
         Some(ShapeIssue::NotStraightEnough)
@@ -404,10 +408,69 @@ fn circularity(points: &[StrokePoint], aspect_ratio: f32) -> f32 {
     (radius_score * 0.58 + aspect_score * 0.24 + coverage_score * 0.18).clamp(0.0, 1.0)
 }
 
-fn corner_count(points: &[StrokePoint]) -> usize {
+const CLOSED_CORNER_THRESHOLD: f32 = 0.60;
+const OPEN_CORNER_THRESHOLD: f32 = 0.68;
+// How sharply corner-ness turns on around the threshold. At ±0.1 rad from
+// the threshold this already reaches ~0.88/0.12, so it reads as a count
+// near a whole number for anything but genuinely marginal turns.
+const CORNER_SIGMOID_SLOPE: f32 = 20.0;
+
+/// A turn angle's corner-ness in [0, 1], via a logistic ramp centered on
+/// `threshold` instead of a hard cutoff — a turn a few degrees short of the
+/// line still contributes partial corner weight instead of vanishing
+/// outright. Softens the A3 cliff where a hand-authored hexagon's corner at
+/// 0.638 rad used to read as *no corner at all* against a 0.68 threshold.
+fn corner_confidence(angle: f32, threshold: f32) -> f32 {
+    1.0 / (1.0 + (-(CORNER_SIGMOID_SLOPE * (angle - threshold))).exp())
+}
+
+/// Sums the confidence of each local peak in a corner-confidence sequence.
+/// Using peaks (not a straight sum) keeps one wide corner from being
+/// counted several times over the samples it spans; `wraps` lets a closed
+/// shape's peak search cross the seam between last and first sample.
+fn sum_of_corner_peaks(confidences: &[f32], wraps: bool) -> f32 {
+    let count = confidences.len();
+    let mut total = 0.0;
+    for index in 0..count {
+        let value = confidences[index];
+        if value < 0.05 {
+            continue;
+        }
+        let previous = if index == 0 {
+            if wraps {
+                confidences[count - 1]
+            } else {
+                f32::NEG_INFINITY
+            }
+        } else {
+            confidences[index - 1]
+        };
+        let next = if index + 1 == count {
+            if wraps {
+                confidences[0]
+            } else {
+                f32::NEG_INFINITY
+            }
+        } else {
+            confidences[index + 1]
+        };
+        // >= previous, > next: a flat-topped peak is credited once, to its
+        // later sample, rather than once per sample on the plateau.
+        if value >= previous && value > next {
+            total += value;
+        }
+    }
+    total
+}
+
+/// A continuous estimate of how many corners a stroke has. Whole numbers for
+/// clear-cut shapes (a clean square reads ~4.0), fractional near a
+/// threshold-straddling corner instead of snapping straight to the nearest
+/// integer — see `corner_confidence`.
+fn corner_count(points: &[StrokePoint]) -> f32 {
     let mut sampled = resample(points, 36);
     if sampled.len() < 5 {
-        return 0;
+        return 0.0;
     }
     // Only closed strokes may wrap around the ends; wrapping an open stroke
     // manufactures phantom corners at its endpoints.
@@ -426,33 +489,25 @@ fn corner_count(points: &[StrokePoint]) -> usize {
             sampled.pop();
         }
         let count = sampled.len();
-        // A regular polygon's turn angle is exact, but hand-authored templates
-        // (e.g. the hexagon "safer" rune) can have corners a little short of a
-        // right angle; 0.68 rad missed two of its six corners outright. Closed
-        // shapes get a lower bar than open strokes, whose corners tend to be
-        // sharper by construction (arrowheads, crosses).
-        let flags = (0..count)
+        // Closed shapes get a lower threshold than open strokes, whose
+        // corners tend to be sharper by construction (arrowheads, crosses).
+        let confidences = (0..count)
             .map(|index| {
                 let previous = sampled[(index + count - 2) % count];
                 let next = sampled[(index + 2) % count];
-                turn_angle(previous, sampled[index], next) > 0.60
+                let angle = turn_angle(previous, sampled[index], next);
+                corner_confidence(angle, CLOSED_CORNER_THRESHOLD)
             })
             .collect::<Vec<_>>();
-        let corners = flags
-            .iter()
-            .enumerate()
-            .filter(|(index, corner)| **corner && !flags[(index + count - 1) % count])
-            .count();
-        corners.max(usize::from(flags.iter().any(|corner| *corner)))
+        sum_of_corner_peaks(&confidences, true)
     } else {
-        let flags = (2..sampled.len() - 2)
-            .map(|index| turn_angle(sampled[index - 2], sampled[index], sampled[index + 2]) > 0.68)
+        let confidences = (2..sampled.len() - 2)
+            .map(|index| {
+                let angle = turn_angle(sampled[index - 2], sampled[index], sampled[index + 2]);
+                corner_confidence(angle, OPEN_CORNER_THRESHOLD)
+            })
             .collect::<Vec<_>>();
-        flags
-            .iter()
-            .enumerate()
-            .filter(|(index, corner)| **corner && (*index == 0 || !flags[index - 1]))
-            .count()
+        sum_of_corner_peaks(&confidences, false)
     }
 }
 
@@ -517,7 +572,10 @@ fn rightward_arrow_score(ink: &NormalizedInk) -> f32 {
     let mid_y = bounds.1 + height * 0.5;
     let tip = points
         .iter()
-        .max_by(|a, b| a.x.total_cmp(&b.x))
+        .max_by(|a, b| {
+            a.x.total_cmp(&b.x)
+                .then_with(|| (b.y - mid_y).abs().total_cmp(&(a.y - mid_y).abs()))
+        })
         .copied()
         .unwrap_or(StrokePoint::new(0.5, 0.5));
     let tip_score = (1.0 - (tip.y - mid_y).abs() / (height * 0.72).max(0.001)).clamp(0.0, 1.0);
@@ -732,18 +790,22 @@ mod tests {
         raw.iter().map(|(x, y)| StrokePoint::new(*x, *y)).collect()
     }
 
+    fn rounded_corners(points: &[StrokePoint]) -> i32 {
+        corner_count(points).round() as i32
+    }
+
     #[test]
     fn open_straight_line_has_no_corners() {
         let line = points(&[(0.15, 0.20), (0.85, 0.80)]);
 
-        assert_eq!(corner_count(&line), 0);
+        assert_eq!(rounded_corners(&line), 0);
     }
 
     #[test]
     fn open_bend_counts_a_single_corner() {
         let bend = points(&[(0.20, 0.20), (0.50, 0.80), (0.80, 0.20)]);
 
-        assert_eq!(corner_count(&bend), 1);
+        assert_eq!(rounded_corners(&bend), 1);
     }
 
     #[test]
@@ -756,15 +818,22 @@ mod tests {
             (0.20, 0.20),
         ]);
 
-        assert_eq!(corner_count(&square), 4);
+        assert_eq!(rounded_corners(&square), 4);
     }
 
     #[test]
-    fn closed_hexagon_counts_six_corners() {
+    fn closed_hexagon_reads_closer_to_six_corners_than_four() {
         // The "safer" rune template: a hand-authored hexagon whose corners
-        // aren't all equal-angle. Two of them fall short of a right angle,
-        // which previously fell below the corner threshold entirely and made
-        // the shape read as a 4-corner diamond ("force") instead.
+        // aren't all equal-angle. Two of them (turn ~0.638 rad) fall just
+        // short of the closed-shape threshold (0.60 was chosen so these
+        // clear it; the *open*-stroke threshold is 0.68, which would have
+        // missed them). corner_count is now continuous (corner_confidence
+        // is a sigmoid, not a hard cutoff), so those two soft corners
+        // contribute partial weight rather than either flipping fully in or
+        // vanishing outright — the total lands near, not exactly at, 6.0.
+        // What matters for recognition is that it reads far closer to a
+        // hexagon (6) than a diamond (4); see safer_template_still_recognizes_safer
+        // and the confusion-matrix gate for the actual recognition outcome.
         let hexagon = points(&[
             (0.50, 0.12),
             (0.80, 0.26),
@@ -775,13 +844,17 @@ mod tests {
             (0.50, 0.12),
         ]);
 
-        assert_eq!(corner_count(&hexagon), 6);
+        let corners = corner_count(&hexagon);
+        assert!(
+            (5.0..=6.2).contains(&corners),
+            "corners={corners}, expected close to 6"
+        );
     }
 
     #[test]
     fn closed_diamond_still_counts_four_corners() {
         let diamond = points(&[(0.50, 0.12), (0.86, 0.50), (0.50, 0.88), (0.14, 0.50), (0.50, 0.12)]);
 
-        assert_eq!(corner_count(&diamond), 4);
+        assert_eq!(rounded_corners(&diamond), 4);
     }
 }

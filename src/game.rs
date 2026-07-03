@@ -3,7 +3,7 @@
 use crate::browser_clipboard::{copy_text, ClipboardCopy};
 use crate::data::GameData;
 use crate::rune_diagnostics::diagnose_session;
-use crate::rune_drawing::{erase_strokes_at, DrawnStroke};
+use crate::rune_drawing::{canonicalize_stroke, erase_strokes_at, DrawnStroke};
 use crate::rune_quality::{practice_report_for_rune, RunePracticeReport};
 use crate::state::{migrate_save_value, CraftReport, GamePhase, GameSession, SaveData};
 use crate::ui::{self, PracticeUi, UiAction, UiContext};
@@ -299,7 +299,7 @@ impl Game {
             UiAction::FinishPracticeStroke => {
                 if let Some(stroke) = self.practice.active_stroke.take() {
                     if stroke.has_ink() {
-                        self.practice.strokes.push(stroke);
+                        self.practice.strokes.push(canonicalize_stroke(stroke));
                     }
                 }
             }

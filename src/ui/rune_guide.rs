@@ -36,7 +36,7 @@ pub(super) fn draw_rune_palette(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut 
         draw_rune_reference_card(
             ctx,
             rune,
-            Rect::new(content.x, content.y + 48.0, content.w, 124.0),
+            Rect::new(content.x, content.y + 48.0, content.w, 148.0),
         );
     }
 
@@ -217,6 +217,18 @@ fn draw_rune_reference_card(ctx: &UiContext<'_>, rune: &RuneDef, rect: Rect) {
         12.0,
         2.0,
         Color::new(0.58, 0.64, 0.61, 1.0),
+    );
+    draw_text_block(
+        "Magnitude: drawn near reference size with a full stroke gives \
+         normal potency. Bigger, fully-traced ink raises it; a short or \
+         under-sized mark still reads, but weaker.",
+        rect.x + 112.0,
+        rect.y + 108.0,
+        rect.w - 122.0,
+        40.0,
+        11.0,
+        2.0,
+        Color::new(0.50, 0.56, 0.53, 1.0),
     );
 }
 

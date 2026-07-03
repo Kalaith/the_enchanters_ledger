@@ -272,9 +272,10 @@ pub(super) fn draw_drawing_slate(
         };
         draw_text_block(
             &format!(
-                "Read: {} | circle {}%",
+                "Read: {} | circle {}% | potency {}%",
                 names,
-                (diagram.circle_quality * 100.0).round() as i32
+                (diagram.circle_quality * 100.0).round() as i32,
+                (diagram.average_rune_potency() * 100.0).round() as i32
             ),
             note_x,
             controls.y + 4.0,

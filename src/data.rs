@@ -49,6 +49,19 @@ impl RuneCategory {
             RuneCategory::Modifier => "Modifier",
         }
     }
+
+    /// A rune's "normal" size, as scale relative to its working circle
+    /// (`StrokeBounds::scale_relative`) — the reference point a magnitude
+    /// channel (`rune_diagram`'s potency) and diagram harmony scoring
+    /// (`magical_circle::size_harmony`) both measure size against.
+    pub fn ideal_scale_in_circle(self) -> f32 {
+        match self {
+            RuneCategory::Effect => 0.18,
+            RuneCategory::Shape => 0.15,
+            RuneCategory::Trigger => 0.14,
+            RuneCategory::Modifier => 0.12,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

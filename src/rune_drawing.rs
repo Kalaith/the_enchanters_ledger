@@ -10,6 +10,7 @@ mod shape;
 mod templates;
 
 use scoring::{adjusted_score_for_rune, NormalizedDrawing};
+pub(crate) use scoring::stroke_assignment;
 pub(crate) use shape::{shape_report_for_rune, ShapeIssue};
 #[cfg(test)]
 pub(crate) use templates::raw;
@@ -129,6 +130,17 @@ pub struct RecognitionOutcome {
     #[serde(default)]
     pub alternatives: Vec<RecognitionCandidate>,
     pub accepted: bool,
+    /// Drawn arc length ÷ the winning template's arc length, both measured
+    /// after normalization to their own bounding box — so this isolates
+    /// "was the stroke drawn to completion" from overall size. 1.0 is a
+    /// full-length trace; a corner-cut or trailed-off stroke reads below
+    /// 1.0. Feeds `potency` (magnitude channel, Phase 2) — see prd.md §4.
+    #[serde(default = "default_ink_ratio")]
+    pub ink_ratio: f32,
+}
+
+fn default_ink_ratio() -> f32 {
+    1.0
 }
 
 pub fn recognize_rune<'a>(
@@ -171,16 +183,27 @@ pub fn recognize_rune<'a>(
         })
         .max(0.0);
     let ambiguous = score_gap < MIN_RECOGNITION_MARGIN;
-    if let Some((_, second, _)) = scores.get(1) {
-        let gap = confidence - *second;
-        if gap < MIN_RECOGNITION_MARGIN {
-            confidence *= 0.92;
-            quality *= 0.96;
-        }
-    }
+    // Fade the ambiguity penalty in smoothly as the margin narrows, instead
+    // of snapping a fixed ×0.92/×0.96 on the instant score_gap dips below
+    // MIN_RECOGNITION_MARGIN — a 1-pixel wiggle that nudges the gap from
+    // just above to just below the line should not visibly jump the
+    // readout. Full penalty at gap=0, none at gap>=MIN_RECOGNITION_MARGIN,
+    // matching the old step's endpoints exactly.
+    let margin_relief = (score_gap / MIN_RECOGNITION_MARGIN).clamp(0.0, 1.0);
+    confidence *= 1.0 - (1.0 - margin_relief) * 0.08;
+    quality *= 1.0 - (1.0 - margin_relief) * 0.04;
     quality = quality.clamp(0.0, 1.0);
     let accepted = confidence >= MIN_RECOGNITION_CONFIDENCE
         && (!ambiguous || confidence >= AMBIGUOUS_ACCEPTANCE_CONFIDENCE);
+    let ink_ratio = template_variants_for_rune(&rune_id)
+        .into_iter()
+        .filter_map(|template| NormalizedDrawing::from_strokes(&template))
+        .max_by(|a, b| {
+            adjusted_score_for_rune(&rune_id, &strokes, &candidate, a)
+                .total_cmp(&adjusted_score_for_rune(&rune_id, &strokes, &candidate, b))
+        })
+        .map(|template| candidate.total_length() / template.total_length().max(0.01))
+        .unwrap_or(1.0);
 
     Some(RecognitionOutcome {
         rune_id,
@@ -190,6 +213,7 @@ pub fn recognize_rune<'a>(
         ambiguous,
         alternatives,
         accepted,
+        ink_ratio,
     })
 }
 
@@ -320,6 +344,64 @@ fn polyline_length(points: &[StrokePoint]) -> f32 {
         .windows(2)
         .map(|segment| segment[0].distance(segment[1]))
         .sum()
+}
+
+/// Target spacing between points after canonicalization — finer than the
+/// 0.004 minimum capture spacing so shape/corner detail survives, coarse
+/// enough that a fast and a slow draw of the same mark converge on
+/// (near-)identical stored points.
+pub const CANONICAL_STROKE_SPACING: f32 = 0.01;
+
+/// Resamples a just-finished stroke to a fixed arc-length spacing, so the
+/// *stored* ink no longer carries the drawing device's frame rate / mouse
+/// speed (A8) — everything downstream (identity, quality, corner detection,
+/// corpus capture) consumes this canonical form. Call once, when a stroke
+/// ends; resampling live while the pen is still down would fight the
+/// in-progress visual feedback for no benefit.
+pub fn canonicalize_stroke(stroke: DrawnStroke) -> DrawnStroke {
+    let length = polyline_length(&stroke.points);
+    if stroke.points.len() < 2 || length <= 0.0001 {
+        return stroke;
+    }
+    let target_count = ((length / CANONICAL_STROKE_SPACING).round() as usize + 1).max(2);
+    DrawnStroke {
+        points: resample_arc_length(&stroke.points, target_count),
+    }
+}
+
+fn resample_arc_length(points: &[StrokePoint], target_count: usize) -> Vec<StrokePoint> {
+    if points.len() < 2 || target_count < 2 {
+        return points.to_vec();
+    }
+    let total = polyline_length(points);
+    if total <= 0.0001 {
+        return vec![points[0]; target_count];
+    }
+    (0..target_count)
+        .map(|index| {
+            let target = total * index as f32 / (target_count - 1) as f32;
+            point_at_distance(points, target)
+        })
+        .collect()
+}
+
+fn point_at_distance(points: &[StrokePoint], target: f32) -> StrokePoint {
+    let mut walked = 0.0;
+    for segment in points.windows(2) {
+        let step = segment[0].distance(segment[1]);
+        if step <= 0.0 {
+            continue;
+        }
+        if walked + step >= target {
+            let t = ((target - walked) / step).clamp(0.0, 1.0);
+            return StrokePoint::new(
+                segment[0].x + (segment[1].x - segment[0].x) * t,
+                segment[0].y + (segment[1].y - segment[0].y) * t,
+            );
+        }
+        walked += step;
+    }
+    *points.last().unwrap()
 }
 
 fn densify_points(points: &[StrokePoint], max_gap: f32) -> Vec<StrokePoint> {

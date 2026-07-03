@@ -15,10 +15,11 @@ use std::fmt::Write as _;
 /// instead of silently loosening the gate, so Phase 1's corner-threshold
 /// work has a concrete list to clear before this allowlist can shrink.
 const KNOWN_CONFUSIONS: &[(&str, &str)] = &[
+    // Sparse-resample density dependence (A8) — corner_count's internal
+    // resample-to-36 grid shifts safer's soft hexagon corners at low input
+    // density. Phase 1 item 1 (canonicalize stroke density at capture)
+    // should clear this; see property_tests' point_density exclusion.
     ("safer", "sphere"),
-    ("safer", "force"),
-    ("force", "sphere"),
-    ("force", "summoning"),
 ];
 
 struct Case {

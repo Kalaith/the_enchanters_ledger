@@ -108,6 +108,38 @@ fn rough_design_still_works_but_scores_lower_than_clean_ink() {
 }
 
 #[test]
+fn doubling_effect_rune_size_raises_power_in_report() {
+    // Phase 2 exit criterion: drawing the same commission at 2x effect-rune
+    // size measurably raises power in the test report.
+    let data = data();
+    let mut normal = unlocked_session(&data);
+    normal.board.drawing_strokes = circled_diagram(&[
+        ("light", 0.26, 0.50),
+        ("sphere", 0.50, 0.50),
+        ("continuous", 0.74, 0.50),
+    ]);
+    normal.interpret_drawing(&data).unwrap();
+    let normal_report = normal.test_design(&data);
+
+    let mut doubled = unlocked_session(&data);
+    let mut strokes = outer_circle();
+    strokes.extend(template_at("light", 0.26, 0.50, 0.36));
+    strokes.extend(template_at("sphere", 0.50, 0.50, 0.18));
+    strokes.extend(template_at("continuous", 0.74, 0.50, 0.18));
+    doubled.board.drawing_strokes = strokes;
+    doubled.interpret_drawing(&data).unwrap();
+    let doubled_report = doubled.test_design(&data);
+
+    assert!(doubled_report.result.matched_request, "{doubled_report:?}");
+    assert!(
+        doubled_report.result.power > normal_report.result.power,
+        "normal={:?} doubled={:?}",
+        normal_report.result,
+        doubled_report.result
+    );
+}
+
+#[test]
 fn rough_inner_circle_prefers_sphere_over_safer() {
     let data = data();
     let mut session = unlocked_session(&data);
@@ -487,20 +519,22 @@ fn circled_order(order: &CommissionDef) -> Vec<DrawnStroke> {
 fn rough_circled_diagram() -> Vec<DrawnStroke> {
     let mut strokes = vec![DrawnStroke {
         points: vec![
-            StrokePoint::new(0.22, 0.34),
-            StrokePoint::new(0.32, 0.16),
-            StrokePoint::new(0.52, 0.12),
-            StrokePoint::new(0.82, 0.24),
-            StrokePoint::new(0.90, 0.52),
-            StrokePoint::new(0.80, 0.78),
-            StrokePoint::new(0.55, 0.90),
-            StrokePoint::new(0.32, 0.80),
-            StrokePoint::new(0.18, 0.58),
-            StrokePoint::new(0.14, 0.44),
+            StrokePoint::new(0.24, 0.46),
+            StrokePoint::new(0.28, 0.20),
+            StrokePoint::new(0.50, 0.08),
+            StrokePoint::new(0.78, 0.18),
+            StrokePoint::new(0.60, 0.38),
+            StrokePoint::new(0.88, 0.44),
+            StrokePoint::new(0.82, 0.70),
+            StrokePoint::new(0.56, 0.60),
+            StrokePoint::new(0.62, 0.86),
+            StrokePoint::new(0.34, 0.80),
+            StrokePoint::new(0.40, 0.58),
+            StrokePoint::new(0.14, 0.62),
         ],
     }];
-    strokes.extend(rough_light(0.26, 0.42, 0.18));
-    strokes.push(rough_sphere(0.50, 0.40, 0.16));
+    strokes.extend(rough_light(0.26, 0.42, 0.15));
+    strokes.push(rough_sphere(0.50, 0.40, 0.13));
     strokes.push(stroke_at(
         &[
             (0.16, 0.55),

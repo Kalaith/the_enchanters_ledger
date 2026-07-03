@@ -2,7 +2,7 @@
 
 use crate::data::{GameConfig, GameData, RuneDef};
 use crate::rune_diagram::{interpret_diagram, DiagramInterpretation};
-use crate::rune_drawing::{erase_strokes_at, DrawnStroke, StrokePoint};
+use crate::rune_drawing::{canonicalize_stroke, erase_strokes_at, DrawnStroke, StrokePoint};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -295,7 +295,7 @@ impl GameSession {
     pub fn finish_drawing_stroke(&mut self) {
         if let Some(stroke) = self.board.active_stroke.take() {
             if stroke.has_ink() {
-                self.board.drawing_strokes.push(stroke);
+                self.board.drawing_strokes.push(canonicalize_stroke(stroke));
                 self.board.last_recognition = None;
                 self.board.last_diagnostic_log = None;
             }
@@ -376,7 +376,7 @@ impl GameSession {
             let node = node_for_diagram_center(rune.center, &occupied);
             occupied.insert(node);
             placed_nodes.push(node);
-            self.board.place(node, &rune.rune_id, rune.quality);
+            self.board.place(node, &rune.rune_id, rune.quality, rune.potency);
         }
         for nodes in placed_nodes.windows(2) {
             let link = Link::new(nodes[0], nodes[1]);

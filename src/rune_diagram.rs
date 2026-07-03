@@ -47,6 +47,16 @@ impl DiagramInterpretation {
             self.runes.iter().map(|rune| rune.quality).sum::<f32>() / self.runes.len() as f32
         }
     }
+
+    /// Average magnitude channel across every rune found — 1.0 is
+    /// reference size with a fully-traced stroke; see `InterpretedRune::potency`.
+    pub fn average_rune_potency(&self) -> f32 {
+        if self.runes.is_empty() {
+            0.0
+        } else {
+            self.runes.iter().map(|rune| rune.potency).sum::<f32>() / self.runes.len() as f32
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,6 +69,16 @@ pub struct InterpretedRune {
     pub scale: f32,
     #[serde(default)]
     pub orbit: f32,
+    /// Magnitude channel (plan Phase 2): how strongly this rune's *size and
+    /// completeness* — as opposed to its shape quality — should scale its
+    /// effect. 1.0 at a category's reference size with a fully-traced
+    /// stroke; see `recognition::potency_for_rune` and prd.md §4.
+    #[serde(default = "default_potency")]
+    pub potency: f32,
+}
+
+fn default_potency() -> f32 {
+    1.0
 }
 
 pub fn interpret_diagram<'a>(
@@ -120,7 +140,6 @@ pub fn interpret_diagram<'a>(
             &cluster,
             &available_runes,
             circle_bounds,
-            circle_quality,
             &mut interpreted,
             &mut rejected_marks,
         ) {
@@ -130,7 +149,6 @@ pub fn interpret_diagram<'a>(
             &cluster,
             &available_runes,
             circle_bounds,
-            circle_quality,
             &mut interpreted,
             &mut rejected_marks,
         ) {
@@ -146,7 +164,6 @@ pub fn interpret_diagram<'a>(
             recognized,
             cluster.bounds,
             circle_bounds,
-            circle_quality,
             &available_runes,
             &mut interpreted,
             &mut rejected_marks,

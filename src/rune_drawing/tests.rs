@@ -255,6 +255,77 @@ fn eraser_drops_sliver_fragments() {
 }
 
 #[test]
+fn every_rune_has_a_data_driven_template() {
+    // Template shapes live in assets/data/rune_templates.json (Phase 1 item
+    // 3); this catches a JSON edit that drops/misspells a rune id before it
+    // ever reaches recognition.
+    let data = GameData::load().unwrap();
+    for rune in &data.runes {
+        let strokes = template_strokes_for_rune(&rune.id);
+        assert!(strokes.is_some(), "no template for rune {}", rune.id);
+        let strokes = strokes.unwrap();
+        assert!(!strokes.is_empty(), "empty template for rune {}", rune.id);
+        assert!(
+            strokes.iter().all(|stroke| stroke.points.len() >= 2),
+            "degenerate stroke in template for rune {}",
+            rune.id
+        );
+    }
+}
+
+#[test]
+fn touch_and_continuous_expose_their_extra_variants() {
+    assert_eq!(template_variants_for_rune("touch").len(), 3, "canonical + 2 variants");
+    assert_eq!(
+        template_variants_for_rune("continuous").len(),
+        2,
+        "canonical + 1 variant"
+    );
+    assert_eq!(
+        template_variants_for_rune("light").len(),
+        1,
+        "no variants defined for light"
+    );
+}
+
+#[test]
+fn canonicalize_stroke_converges_regardless_of_capture_density() {
+    // Same physical drag, captured at a slow frame rate (few raw points)
+    // and a fast one (many raw points, including near-duplicate jitter a
+    // real mouse would produce). Canonicalizing both should land on
+    // point-for-point comparable strokes, so recognition and quality never
+    // see which capture rate produced them (A8).
+    let sparse = DrawnStroke {
+        points: vec![
+            StrokePoint::new(0.10, 0.10),
+            StrokePoint::new(0.50, 0.50),
+            StrokePoint::new(0.90, 0.10),
+        ],
+    };
+    let mut dense_points = Vec::new();
+    for segment in sparse.points.windows(2) {
+        for step in 0..=40 {
+            let t = step as f32 / 40.0;
+            dense_points.push(StrokePoint::new(
+                segment[0].x + (segment[1].x - segment[0].x) * t,
+                segment[0].y + (segment[1].y - segment[0].y) * t,
+            ));
+        }
+    }
+    let dense = DrawnStroke {
+        points: dense_points,
+    };
+
+    let canonical_sparse = canonicalize_stroke(sparse);
+    let canonical_dense = canonicalize_stroke(dense);
+
+    assert_eq!(canonical_sparse.points.len(), canonical_dense.points.len());
+    for (a, b) in canonical_sparse.points.iter().zip(&canonical_dense.points) {
+        assert!(a.distance(*b) < 0.002, "sparse={a:?} dense={b:?}");
+    }
+}
+
+#[test]
 fn eraser_splits_a_stroke_without_clearing_the_whole_mark() {
     let mut strokes = raw(&[&[(0.12, 0.50), (0.88, 0.50)]]);
 

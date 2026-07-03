@@ -164,16 +164,27 @@ impl GameSession {
             placed.iter().map(|placed| placed.quality).sum::<f32>() / placed.len() as f32
         };
         let weak_marks = placed.iter().filter(|placed| placed.quality < 0.58).count() as i32;
+        let circle_quality = self
+            .board
+            .last_diagram
+            .as_ref()
+            .map_or(0.0, |diagram| diagram.circle_quality);
         let circle_spell = self
             .board
             .last_diagram
             .as_ref()
             .and_then(|diagram| diagram.spell.as_ref());
 
+        // Magnitude channel (plan Phase 2): potency scales power and mana
+        // cost per rune, on top of (not folded into) quality's existing
+        // effect — a bigger, fully-traced effect rune costs more and hits
+        // harder than the same rune drawn small, independent of how
+        // precisely its shape was drawn.
         let mut power = placed
             .iter()
             .map(|placed| {
-                (placed.rune.power as f32 * (0.35 + placed.quality * 0.65)).round() as i32
+                (placed.rune.power as f32 * (0.35 + placed.quality * 0.65) * placed.potency)
+                    .round() as i32
             })
             .sum::<i32>();
         let mut stability = 48
@@ -186,7 +197,8 @@ impl GameSession {
         let mut mana_cost = placed
             .iter()
             .map(|placed| {
-                placed.rune.mana_cost + ((1.0 - placed.quality).max(0.0) * 12.0).round() as i32
+                (placed.rune.mana_cost as f32 * placed.potency).round() as i32
+                    + ((1.0 - placed.quality).max(0.0) * 12.0).round() as i32
             })
             .sum::<i32>();
         let mut safety = 35
@@ -213,6 +225,25 @@ impl GameSession {
         mana_cost += link_bonus.cost;
         safety += link_bonus.safety;
         score += link_bonus.score;
+
+        // D2: circle quality used to be multiplied into *every* placed
+        // rune's stored quality (so its effect scaled with rune count and
+        // was invisible as its own term). It now contributes once,
+        // additively, around a "decent circle" baseline of 0.55.
+        stability += ((circle_quality - 0.55) * 20.0).round() as i32;
+        safety += ((circle_quality - 0.55) * 14.0).round() as i32;
+        score += ((circle_quality - 0.55) * 10.0).round() as i32;
+
+        // Containment budget (plan Phase 2 item 3, sets up Phase 4's full
+        // rule): total potency drawn must be covered by what the circle —
+        // and, once present, its ring/perimeter structure — can contain.
+        // Exceeding it costs stability, predictably and inspectably,
+        // rather than randomly.
+        let total_potency = placed.iter().map(|placed| placed.potency).sum::<f32>();
+        let containment_capacity =
+            2.0 + circle_quality * 6.0 + circle_spell.map_or(0.0, |spell| spell.containment * 4.0);
+        let potency_excess = (total_potency - containment_capacity).max(0.0);
+        stability -= (potency_excess * 10.0).round() as i32;
 
         if let Some(spell) = circle_spell {
             power += spell.power_bonus;
@@ -308,6 +339,7 @@ impl GameSession {
                 data.rune(&placed.rune_id).map(|rune| PlacedRuneRef {
                     rune,
                     quality: placed.quality.clamp(0.0, 1.0),
+                    potency: placed.potency.clamp(0.0, 3.0),
                 })
             })
             .collect()
@@ -426,6 +458,7 @@ struct LinkQuality {
 struct PlacedRuneRef<'a> {
     rune: &'a RuneDef,
     quality: f32,
+    potency: f32,
 }
 
 fn ordered_pair(a: RuneCategory, b: RuneCategory) -> (RuneCategory, RuneCategory) {

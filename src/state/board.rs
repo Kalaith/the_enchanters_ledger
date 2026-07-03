@@ -11,12 +11,19 @@ fn default_rune_quality() -> f32 {
     1.0
 }
 
+fn default_rune_potency() -> f32 {
+    1.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlacedRune {
     pub rune_id: String,
     pub node: usize,
     #[serde(default = "default_rune_quality")]
     pub quality: f32,
+    /// Magnitude channel (plan Phase 2) — see `InterpretedRune::potency`.
+    #[serde(default = "default_rune_potency")]
+    pub potency: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,15 +104,17 @@ impl DesignBoard {
         self.placed.iter().find(|placed| placed.node == node)
     }
 
-    pub(super) fn place(&mut self, node: usize, rune_id: &str, quality: f32) {
+    pub(super) fn place(&mut self, node: usize, rune_id: &str, quality: f32, potency: f32) {
         if let Some(existing) = self.placed.iter_mut().find(|placed| placed.node == node) {
             existing.rune_id = rune_id.to_owned();
             existing.quality = quality;
+            existing.potency = potency;
         } else {
             self.placed.push(PlacedRune {
                 rune_id: rune_id.to_owned(),
                 node,
                 quality,
+                potency,
             });
         }
         let occupied: HashSet<usize> = self.placed.iter().map(|placed| placed.node).collect();

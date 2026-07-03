@@ -422,13 +422,7 @@ fn size_harmony(runes: &[InterpretedRune], rune_defs: &[&RuneDef]) -> f32 {
         let Some(def) = rune_def(rune_defs, &rune.rune_id) else {
             continue;
         };
-        let ideal = match def.category {
-            RuneCategory::Effect => 0.18,
-            RuneCategory::Shape => 0.15,
-            RuneCategory::Trigger => 0.14,
-            RuneCategory::Modifier => 0.12,
-        };
-        let scale_score = ratio_score(rune.scale.max(0.01), ideal);
+        let scale_score = ratio_score(rune.scale.max(0.01), def.category.ideal_scale_in_circle());
         let orbit_score = match def.category {
             RuneCategory::Shape => (1.0 - rune.orbit / 0.34).clamp(0.0, 1.0),
             RuneCategory::Modifier => (1.0 - (rune.orbit - 0.55).abs() / 0.42).clamp(0.0, 1.0),
@@ -461,7 +455,7 @@ fn dominant_effect(runes: &[InterpretedRune], rune_defs: &[&RuneDef]) -> Option<
                 def.tier as f32 + rune.quality + rune.scale,
             ))
         })
-        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.0.cmp(a.0)))
         .map(|(id, _)| id.to_owned())
 }
 

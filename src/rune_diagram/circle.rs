@@ -11,13 +11,16 @@ pub(crate) fn select_working_circle(
         .max_by(|a, b| {
             let a_span = a.2.width().max(a.2.height());
             let b_span = b.2.width().max(b.2.height());
-            a_span.total_cmp(&b_span).then_with(|| a.1.total_cmp(&b.1))
+            a_span
+                .total_cmp(&b_span)
+                .then_with(|| a.1.total_cmp(&b.1))
+                .then_with(|| b.0.cmp(&a.0))
         })
         .copied()
         .or_else(|| {
             candidates
                 .iter()
-                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
                 .copied()
         })
 }
@@ -40,6 +43,7 @@ pub(crate) fn select_working_circle_for_strokes(
                 .then_with(|| a_enclosed.cmp(b_enclosed))
                 .then_with(|| a_span.total_cmp(&b_span))
                 .then_with(|| a.1.total_cmp(&b.1))
+                .then_with(|| b.0.cmp(&a.0))
         })
         .map(|(candidate, _)| candidate);
 

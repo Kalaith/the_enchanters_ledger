@@ -10,12 +10,21 @@
 > here should trace back to a test in `src/rune_drawing/confusion_gate.rs`,
 > `src/rune_drawing/property_tests.rs`, or `tests/corpus/`.
 >
-> Written as Phase 0 of `.project/magic-symbol-system-plan.md`. It documents
-> the system **as it exists today** (post quick-wins: Hungarian stroke
-> assignment, open-stroke corner fix, eraser-fragment merge, strict/identity
-> variant parity). It is not a design proposal — proposals live in the plan
-> document's Phase 1–5 sections. This doc is also the intended source for
-> in-game journal/tutorial copy once that's written.
+> Written as Phase 0 of `.project/magic-symbol-system-plan.md`, updated
+> through Phase 2. It documents the system **as it exists today**: Hungarian
+> stroke assignment, open-stroke corner fix, eraser-fragment merge,
+> strict/identity variant parity, deterministic tie-breaks, mismatch-segment
+> alignment (D3), a continuous (not stepped) ambiguity penalty and corner
+> confidence, capture-time stroke canonicalization (A8), rune templates
+> moved to `assets/data/rune_templates.json`, a real size/completeness
+> magnitude channel (`potency`, §4), and the D1/D2 scoring-stack cleanup
+> (layout-position bias deleted, circle quality now additive not stacked).
+> It is not a design proposal — proposals live in the plan document's
+> Phase 3–5 sections (Phase 1's
+> generic/data-driven *structural checks* — as opposed to template shapes,
+> which are already data-driven — remain future work; see §2.3). This doc
+> is also the intended source for in-game journal/tutorial copy once
+> that's written.
 
 ---
 
@@ -104,11 +113,15 @@ ties break on rune id for determinism (`src/rune_drawing.rs:154`).
   — flagged in the plan as B3/A3-adjacent and intended to become an
   explicit, documented factor in Phase 1.
 
-### 2.3 Structural gates (per-rune, not generic yet)
+### 2.3 Structural gates (per-rune formulas; shapes are data-driven, checks are not)
 
-Eight of 33 runes have a hand-written structural check in
-`shape_report_for_rune` (`src/rune_drawing/shape.rs:52`) that multiplies
-into their score:
+Template *shapes* are data-driven: all 33 runes' stroke layouts (plus the
+`touch`/`continuous` variants) live in `assets/data/rune_templates.json`,
+loaded once into a lazily-built table (`rune_drawing/templates.rs`) —
+adding a rune's drawable shape is a JSON edit, no Rust. What is **not**
+data-driven yet is the *structural check* layer below: eight of 33 runes
+have a hand-written check in `shape_report_for_rune`
+(`src/rune_drawing/shape.rs:52`) that multiplies into their score:
 
 | Rune | Structural check | Corner target | Notes |
 |---|---|---|---|
@@ -118,26 +131,44 @@ into their score:
 | `touch` | arrow/shaft structure | — | `touch_report` |
 | `beam` / `aura` / `burst` / `cone` | shape-specific structure | — | see `shape.rs` |
 
-Corner counting (`corner_count`, `shape.rs:407`) resamples a stroke to 36
-arc-length points and flags a turn angle over threshold between the sample
-2 steps before and 2 steps after each point. **Closed strokes use a 0.60 rad
-(~34°) threshold; open strokes use 0.68 rad (~39°)** — closed shapes get a
-lower bar because hand-authored closed templates (e.g. the hexagon) can have
-corners short of a right angle, while open-stroke corners (arrowheads,
-crosses) tend to be sharp by construction. This split exists because at a
-single shared 0.68 threshold, two of `safer`'s six hexagon corners fell
-below it and the shape read as a 4-corner `force` diamond instead — see
-`shape::tests::closed_hexagon_counts_six_corners`.
+**Deferred:** generalizing this table into data-driven rules (per plan item
+3 — "generic feature checks... computed from the template itself; delete
+the per-rune match arms") did not happen this pass. `sphere`/`safer`/
+`force`/`cone` reduce fairly cleanly to `{closed, corner_range}`, but
+`touch`/`beam`/`aura`/`burst` use bespoke geometry (arrow-tip detection,
+horizontal-bar crossing, radial-spoke angles) that doesn't fit a
+5-parameter generic model without a real rule DSL — a separate design
+task, not a mechanical data move like the template shapes above were.
 
-**Known limitation (tracked, not silently hidden):** `sphere`, `safer`,
-`force`, and `summoning` are all close in this scoring space (round or
-near-round single-stroke shapes) and can flip into each other under
-moderate perturbation (14–20% point-density change, ~1.25–1.35× scale, ~1°
-jitter). The specific pairs are enumerated in `confusion_gate.rs`'s
-`KNOWN_CONFUSIONS` so *new* confusions fail CI while these tracked ones
-don't. Softening this properly is Phase 1 item 4 (smooth corner-confidence
-ramps instead of a hard threshold) — this doc will shrink the allowlist
-as that work lands, not by re-loosening the gate.
+Corner counting (`corner_count`, `shape.rs`) resamples a stroke to 36
+arc-length points and computes a turn angle between the sample 2 steps
+before and 2 steps after each point. As of Phase 1, `corner_count` returns a
+**continuous** value, not an integer: each turn angle is passed through a
+logistic ramp (`corner_confidence`, slope 20, centered on the threshold)
+instead of a hard `angle > threshold` cutoff, and the total is the sum of
+each local peak's confidence (`sum_of_corner_peaks`) — a turn a few degrees
+short of the line now contributes partial weight instead of vanishing
+outright. **Closed strokes use a 0.60 rad (~34°) threshold; open strokes use
+0.68 rad (~39°)** — closed shapes get a lower bar because hand-authored
+closed templates (e.g. the hexagon) can have corners short of a right
+angle, while open-stroke corners (arrowheads, crosses) tend to be sharp by
+construction. The two thresholds exist because at a single shared 0.68,
+two of `safer`'s six hexagon corners fell below it and the shape read as a
+4-corner `force` diamond instead — see
+`shape::tests::closed_hexagon_reads_closer_to_six_corners_than_four`.
+Consumers (`sphere_report`, `safer_report`, `diamond_report`, `cone_report`,
+`aura_report`) compare this float directly (e.g. `corners < 4.0`) rather
+than casting an integer.
+
+**Known limitation, much reduced (tracked, not silently hidden):** before
+the continuous-confidence change, `sphere`/`safer`/`force`/`summoning`
+(round or near-round single-stroke shapes) could flip into each other under
+moderate perturbation — 4 tracked pairs in `confusion_gate.rs`'s
+`KNOWN_CONFUSIONS`. After softening the corner-count cliff, only one
+remains: `("safer", "sphere")` under sparse (14-point) resampling — see
+§2.5. *New* confusions still fail CI; this allowlist should keep shrinking
+as remaining cliffs (the identity/quality blend's own thresholds, closure
+scoring) get the same treatment, not by re-loosening the gate.
 
 ### 2.4 Acceptance
 
@@ -145,20 +176,38 @@ as that work lands, not by re-loosening the gate.
 regardless of margin. `MIN_RECOGNITION_MARGIN = 0.04` — if the winner beats
 the runner-up by less than this, the read is `ambiguous`; an ambiguous read
 is still `accepted` if confidence clears `AMBIGUOUS_ACCEPTANCE_CONFIDENCE =
-0.58` (a close-but-confident read), and both confidence and quality are
-lightly discounted (×0.92 / ×0.96) when this happens
-(`src/rune_drawing.rs:19-21, 173-183`).
+0.58` (a close-but-confident read). As of Phase 1, the resulting discount to
+confidence/quality is a **continuous ramp**, not a step: `margin_relief =
+(score_gap / MIN_RECOGNITION_MARGIN).clamp(0,1)`, then `confidence *= 1.0 -
+(1.0 - margin_relief) * 0.08` and `quality *= 1.0 - (1.0 - margin_relief) *
+0.04` — full discount at `score_gap = 0`, none at `score_gap ≥
+MIN_RECOGNITION_MARGIN`, smooth in between (previously a hard `×0.92/×0.96`
+step at the margin line). See
+`property_tests::ambiguity_penalty_has_no_visible_cliff`.
+(`src/rune_drawing.rs:19-21`, `recognize_rune`.)
 
-### 2.5 Known gap: density dependence (A8)
+### 2.5 Density dependence (A8) — mitigated at capture, still present at the recognizer level
 
 Corner detection resamples to a **fixed 36 points** regardless of input
-density, but very sparse (≤~20 points) or very dense (≥~70 points) input to
-a tight-margin shape like `safer`'s hexagon can shift where those 36 samples
-land relative to its corners enough to misread. `safer` is excluded from
-`property_tests::point_density_does_not_change_identity` for this reason.
-Proper fix is Phase 1 item 1 (canonicalize to a fixed arc-length density
-*at capture*, not per-check) — this removes the device/framerate leak at
-the source instead of chasing it in each shape check.
+density, so very sparse (≤~20 points) or very dense (≥~70 points) input to
+a tight-margin shape like `safer`'s hexagon can still shift where those 36
+samples land relative to its corners enough to misread — `safer` remains
+excluded from `property_tests::point_density_does_not_change_identity`, and
+`("safer", "sphere")` remains the one entry in `confusion_gate.rs`'s
+`KNOWN_CONFUSIONS`.
+
+Phase 1 item 1 is implemented: `canonicalize_stroke`
+(`src/rune_drawing.rs`) resamples every stroke to a fixed **0.01 arc-length
+spacing** (`CANONICAL_STROKE_SPACING`) the moment it finishes drawing
+(`state.rs::finish_drawing_stroke`, `game.rs`'s `FinishPracticeStroke`
+handler) — before it is ever scored, matched, or saved. Two drawings of the
+same physical motion captured at different frame rates now converge on
+(near-)identical stored points (`rune_drawing::tests::canonicalize_stroke_converges_regardless_of_capture_density`).
+This removes the device/framerate leak **for real gameplay capture**. It
+does not by itself change `corner_count`'s own internal 36-sample grid, so
+a rune fed a genuinely very short/sparse *stroke* (not just a low sample
+rate) — or a synthetic/corpus sample captured before this landed — can
+still land in the residual gap documented above.
 
 ---
 
@@ -190,47 +239,89 @@ Final recognition quality blends this strict score into the identity match:
 — shape match still dominates, but drawing it the "right" way adds up to
 30% on top.
 
+`RecognitionOutcome` also carries `ink_ratio` (Phase 2): the winning rune's
+drawn arc length ÷ its best-matching template's arc length, both measured
+post-normalization (scale-invariant — this isolates "was the stroke traced
+to completion" from "how big was it drawn"). It doesn't affect identity or
+quality; it feeds `potency` (§4) instead.
+
 ---
 
 ## 4. Magnitude — size and length as effect strength
 
-**This is intentionally minimal today** and is Phase 2's job to build out;
-documenting the current state so the gap is explicit rather than assumed.
+A rune's shape can be identified and well-drawn (§2, §3) and *still* carry
+a magnitude: how big it was drawn, and whether the stroke was carried all
+the way through. That's `potency` — a per-rune multiplier, independent of
+shape quality, computed in `push_recognized_rune`
+(`rune_diagram/recognition.rs`) and stored on `InterpretedRune.potency`.
 
-### 4.1 What exists
+### 4.1 The two inputs
 
-- `InterpretedRune.scale` is captured (the rune's size relative to its
-  circle) but only the *dominant* effect rune's scale feeds spell
-  `intensity`, clamped at 0.35 — i.e. size has a small, single-channel
-  effect, not a per-rune one.
-- `total_length` (post-normalization) is compared as a weak *identity*
-  signal (`length_score` in `score_against_template`, weight 0.07) — an
-  under-drawn stroke loses a little match confidence, not a documented
-  potency reduction.
+**Size**, via `scale` (already captured — `bounds.scale_relative(circle_bounds)`,
+the rune's bounding box vs. the working circle's, §5.2), compared against
+a **reference size per category**, `RuneCategory::ideal_scale_in_circle`
+(`src/data.rs`): Effect 0.18, Shape 0.15, Trigger 0.14, Modifier 0.12 — the
+same constants `magical_circle::size_harmony` already used for diagram
+symmetry scoring, now a single shared source of truth.
+`scale_ratio = scale / ideal`; 1.0 = drawn at reference size.
 
-### 4.2 What's missing (Phase 2 scope, not implemented)
+**Completeness**, via `ink_ratio` (§3) — a stroke that stops short of the
+template's full length pulls potency down *before* it's short enough to
+break identity outright.
 
-- No per-rune `potency` computed from scale + ink ratio (drawn length ÷
-  expected length at that scale).
-- No documented identity-band vs magnitude-band split per rune.
-- "Larger symbol → larger effect" and "shorter line → weaker effect" are
-  not real mechanics yet, only capturable data.
+### 4.2 The curve
 
-### 4.3 Layout position (a magnitude-adjacent penalty, currently undocumented in-game)
+```
+potency_from_scale_ratio(ratio):
+    ratio < 1.0:  1.0 + (ratio - 1.0) × 0.8   # → 0.6 at ratio 0.5
+    ratio ≥ 1.0:  1.0 + (ratio - 1.0) × 0.6   # → 1.6 at ratio 2.0
 
-`layout_quality` (`src/rune_diagram/recognition.rs:270-280`) hard-codes
-category home positions, relative to the circle's bounding box in 0..1
-space: **Effect → (0.30, 0.50)** (left), **Trigger → (0.70, 0.50)** (right),
-**Modifier → (0.50, 0.72)** (bottom), **Shape → (0.50, 0.50)** (center, so
-Shape runes never take this penalty). `distance_score =
-(1 - distance/0.48).clamp(0,1)`, then
-`layout = (0.76 + distance_score × 0.24).clamp(0,1)` — a floor of 0.76 and
-a ceiling of 1.0, i.e. **exactly a 0–24% penalty band**, applied
-multiplicatively (§5.4). This is real, currently-active scoring behavior
-that is not taught to the player anywhere. Per the plan (D1), this needs to
-be either promoted to a taught mechanic or removed for freehand scoring;
-until that decision is made, treat it as a known undocumented penalty, not
-a rule to design around.
+potency = (potency_from_scale_ratio(scale_ratio) × ink_ratio.clamp(0.5, 1.0))
+              .clamp(0.35, 2.2)
+```
+
+This is exactly the plan's example curve (0.6× at half reference size, 1.6×
+at double), piecewise-linear through (0.5, 0.6) → (1.0, 1.0) → (2.0, 1.6),
+each segment's slope continuing past those anchors rather than flattening,
+then hard-clamped. `ink_ratio` only ever *reduces* potency (clamped to
+`[0.5, 1.0]` — no bonus for excess ink beyond the template's length) and
+never worse than half credit.
+
+**Deliberately not folded into potency:** shape `quality`. The plan lists
+scale, ink_ratio, and "quality as today" as potency's inputs; this
+implementation keeps `quality` as its own, separately-applied factor in
+`evaluate()` (§5.4) rather than multiplying it into potency too — doing
+otherwise would reintroduce exactly the kind of compounded, opaque
+multiplier stack D2 (§5.4) removes elsewhere in this pass. A sloppy but
+huge rune shows high potency and low quality as two distinct, inspectable
+numbers, not one blended score.
+
+There is no per-rune identity/magnitude "band" table — the curve and
+reference sizes are uniform across all runes via category, not hand-tuned
+per rune. `RuneCategory::ideal_scale_in_circle` is the one number a new
+rune's category determines; nothing else about potency needs per-rune data.
+
+### 4.3 Where it shows up
+
+- `evaluate()` (§5.4): `power` and the base component of `mana_cost` scale
+  with potency, on top of quality's existing (separate) effect.
+- A containment budget (§5.4): total potency across all placed runes must
+  be covered by circle quality (and, once present, structure); exceeding
+  it costs stability.
+- UI: the drawing slate's post-interpretation readout shows average potency
+  (`ui/drawing.rs`, "potency NN%"); the rune guide reference card
+  (`ui/rune_guide.rs`) explains the mechanic in one line per rune category.
+
+### 4.4 Layout position — resolved (D1: deleted)
+
+The previous `layout_quality` position bias (category home positions,
+0–24% quality penalty for drawing off-position) has been **deleted**, per
+the plan's own recommendation: freehand scoring should not silently
+penalize where a well-drawn rune was placed. See
+`rune_diagram::tests::rune_quality_does_not_depend_on_board_position`.
+Position semantics may return in Phase 4's spell grammar, where placement
+(e.g. a modifier between an effect and its ring) can mean something taught
+to the player — not before.
 
 ---
 
@@ -324,28 +415,67 @@ or a tier-≥4 rune; tier 2 ("woven") needs complexity ≥0.48; else tier 1
 to score, power, stability, mana cost, and safety in `evaluate()`
 (§5.4) — they do not multiply.
 
-### 5.4 From per-rune quality to score (the multiplicative stack, D2)
+### 5.4 From per-rune quality/potency to score (D2: additive, not stacked)
 
-Per placed rune, the final stored quality is computed in
-`rune_diagram/recognition.rs` (`push_recognized_rune`), **not**
-`state/evaluate.rs`:
+**Resolved as of Phase 2.** Per placed rune, the stored `quality` is now
+just `recognized.quality.clamp(0.0, 1.0)` — identity/strict quality (§3),
+unmodified. Circle quality and layout position no longer multiply into it
+(`push_recognized_rune`, `rune_diagram/recognition.rs`); layout was deleted
+outright (§4.4) and circle quality now contributes exactly once, additively,
+in `evaluate()` (`src/state/evaluate.rs`):
 
 ```
-quality = (recognized.quality × circle_quality × layout_quality).clamp(0.20, 1.0)
+circle_quality = board.last_diagram.circle_quality   // 0.0 if no diagram yet
+stability += round((circle_quality - 0.55) × 20.0)
+safety    += round((circle_quality - 0.55) × 14.0)
+score     += round((circle_quality - 0.55) × 10.0)
 ```
 
-— identity/strict quality (§3), the working circle's own quality (§5.1),
-and layout position (§4.3) all multiply together with a **0.20 floor**.
-This is D2: three independently-meaningful scores collapse into one opaque
-number before the player ever sees it. `evaluate()`
-(`src/state/evaluate.rs`) then sums `power`/`stability`/`mana_cost`/`safety`
-per placed rune scaled by this quality (e.g.
-`power: rune.power × (0.35 + quality × 0.65)`), adds the circle spell's
-additive bonuses from §5.3, and caps `score` at `68 + avg_quality × 52`.
-Grade thresholds: **Failed** if the request wasn't matched, a core rune is
-missing, or `score < 35`; **Unstable** if `stability < 42 || safety < 32 ||
-score < 64`; **Brilliant** if `score ≥ 92 && stability ≥ 68 && safety ≥
-48`; else **Reliable**. `accident = stability < 26 || safety < 18`.
+— a "decent circle" (0.55) is neutral; better circles add, worse ones
+subtract, once per evaluation regardless of how many runes are placed
+(previously its effect scaled with rune count, since it multiplied into
+*every* rune's quality).
+
+**Potency** (§4) scales `power` and the base of `mana_cost` per placed
+rune, on top of quality's own (separate, unchanged-in-kind) effect:
+
+```
+power      += round(rune.power × (0.35 + quality × 0.65) × potency)
+mana_cost  += round(rune.mana_cost × potency) + round((1 - quality).max(0) × 12.0)
+stability  += round(rune.stability - (1 - quality).max(0) × 22.0)   // unchanged
+safety     += round(rune.safety   - (1 - quality).max(0) × 18.0)    // unchanged
+```
+
+**Containment budget** (plan item 3 — a first cut of the Phase 4 risk
+mechanic, not the final version):
+
+```
+total_potency = sum(potency for every placed rune)
+containment_capacity = 2.0 + circle_quality × 6.0
+                            + circle_spell.map_or(0.0, |s| s.containment × 4.0)
+stability -= round((total_potency - containment_capacity).max(0.0) × 10.0)
+```
+
+A circle alone supports a modest total potency; ring/perimeter structure
+(via `circle_spell.containment`, §5.3) raises the ceiling. Exceeding it
+costs stability predictably, not randomly — this is deliberately rough
+(baseline 2.0 and the 6.0/4.0/10.0 coefficients are a starting point, not
+balanced), since it exists to give Phase 4's full budget rule somewhere to
+build from.
+
+After the circle spell's own bonuses (`power_bonus` etc., §5.3) are folded
+in, `score` is capped at `68 + avg_quality × 52`. Grade thresholds:
+**Failed** if the request wasn't matched, a core rune is missing, or
+`score < 35`; **Unstable** if `stability < 42 || safety < 32 || score <
+64`; **Brilliant** if `score ≥ 92 && stability ≥ 68 && safety ≥ 48`; else
+**Reliable**. `accident = stability < 26 || safety < 18`.
+
+Note for tuning: removing the old multiplicative discount means `quality`
+values (and therefore the score cap) run measurably higher across the
+board than before Phase 2 — `state::tests`' rough-vs-clean fixture needed
+rebalancing to stay meaningfully "rough" under the new, more transparent
+scoring. Expect other hand-tuned test fixtures/thresholds to need similar
+recalibration as this system's constants keep moving.
 
 ### 5.5 What circle grammar does *not* yet have
 
@@ -356,10 +486,11 @@ score < 64`; **Brilliant** if `score ≥ 92 && stability ≥ 68 && safety ≥
 - **Compositional semantics.** There's no spell grammar today — a named
   spell is a stat-blob-plus-lookup, not a data-defined predicate over
   effects/shape/trigger/structure. Phase 4 scope.
-- **A containment budget rule.** Nothing currently checks that drawn
-  potency is "covered" by containment structure (circle quality, rings,
-  perimeter script). Phase 4 scope — this is meant to be the core risk
-  mechanic (uncontained power degrades stability predictably).
+- **The *full* containment budget rule.** §5.4 now has a first-cut version
+  (total potency vs. a capacity from circle quality + containment). Phase
+  4's job is to replace the rough baseline/coefficients with a properly
+  balanced version, likely tied into the spell-grammar's structure
+  requirements rather than a flat additive formula.
 
 ---
 
@@ -378,9 +509,12 @@ alongside it.
 | `MERGE_MAX_GAP` | 0.02 (or 15% of shorter stroke) | `rune_drawing.rs` | §2.1 continuation merge |
 | `MERGE_MAX_TURN_COS` | 0.82 (~35°) | `rune_drawing.rs` | §2.1 continuation merge |
 | `MAX_OPTIMAL_ASSIGNMENT_STROKES` | 12 | `rune_drawing/scoring.rs` | §2.1 Hungarian vs. greedy cutoff |
-| corner turn threshold (closed) | 0.60 rad | `rune_drawing/shape.rs` | §2.3 corner detection |
-| corner turn threshold (open) | 0.68 rad | `rune_drawing/shape.rs` | §2.3 corner detection |
+| `CLOSED_CORNER_THRESHOLD` | 0.60 rad | `rune_drawing/shape.rs` | §2.3 corner-confidence center (closed) |
+| `OPEN_CORNER_THRESHOLD` | 0.68 rad | `rune_drawing/shape.rs` | §2.3 corner-confidence center (open) |
+| `CORNER_SIGMOID_SLOPE` | 20.0 | `rune_drawing/shape.rs` | §2.3 how sharply corner-ness ramps around the threshold |
 | corner resample target | 36 points | `rune_drawing/shape.rs` | §2.3, §2.5 density gap |
+| `CANONICAL_STROKE_SPACING` | 0.01 | `rune_drawing.rs` | §2.5 fixed arc-length spacing applied at capture |
+| ambiguity penalty ramp | full at `score_gap=0` (×0.92 conf / ×0.96 quality), none at `score_gap ≥ MIN_RECOGNITION_MARGIN`, linear between | `rune_drawing.rs` | §2.4 |
 | strict quality weights | shape 0.46 / start 0.22 / order 0.32 | `rune_quality.rs` | §3 |
 | identity/strict blend | `best_score × (0.70 + strict × 0.30)` | `rune_drawing.rs` | §3 |
 | `MIN_CIRCLE_QUALITY` | 0.32 | `rune_diagram.rs` | §5.1 `circle_found` |
@@ -393,9 +527,13 @@ alongside it.
 | structure-mark population thresholds | satellites ≥3 @ q>0.68, rings ≥2 @ q>0.48, scripts ≥8 @ q>0.42, radials ≥6 @ q>0.68 | `rune_diagram.rs` | §5.2 |
 | complexity/intensity/containment targets | rings 3, satellites 5, radials 4, perimeter 14, scripts 28, runes 6 | `magical_circle.rs` | §5.3 |
 | tier thresholds | tier4: complexity≥0.72 + tier≥4 rune + ≥2 rings + ≥3 satellites + ≥6 perimeter; tier3: complexity≥0.61 or tier≥4 rune; tier2: complexity≥0.48 | `magical_circle.rs` | §5.3 |
-| `layout_quality` home positions | Effect (0.30,0.50), Trigger (0.70,0.50), Modifier (0.50,0.72), Shape (0.50,0.50) | `rune_diagram/recognition.rs` | §4.3 |
-| `layout_quality` off-home penalty | `0.76 + (1-dist/0.48).clamp(0,1)×0.24` → 0–24% band | `rune_diagram/recognition.rs` | §4.3 |
-| per-rune stored quality floor | 0.20 | `rune_diagram/recognition.rs` | §5.4 (D2) |
+| `RuneCategory::ideal_scale_in_circle` | Effect 0.18, Shape 0.15, Trigger 0.14, Modifier 0.12 | `data.rs` | §4.1 potency's size reference, also `size_harmony` |
+| potency scale curve | (0.5× ratio → 0.6), (1.0× → 1.0), (2.0× → 1.6), slopes continue past anchors | `rune_diagram/recognition.rs` | §4.2 |
+| potency ink_ratio factor | `ink_ratio.clamp(0.5, 1.0)` | `rune_diagram/recognition.rs` | §4.2 |
+| potency final clamp | `[0.35, 2.2]` | `rune_diagram/recognition.rs` | §4.2 |
+| circle-quality score contribution | `(circle_quality - 0.55) × {20 stability, 14 safety, 10 score}`, additive once per evaluation | `state/evaluate.rs` | §5.4 (D2) |
+| power/mana potency scaling | `power × potency`, `mana_cost's base × potency` (on top of quality's own effect) | `state/evaluate.rs` | §5.4 |
+| containment budget | `capacity = 2.0 + circle_quality×6.0 + containment×4.0`; excess potency costs `×10.0` stability | `state/evaluate.rs` | §5.4 (rough first cut) |
 | `evaluate()` score cap | `68 + avg_quality × 52` | `state/evaluate.rs` | §5.4 |
 | grade thresholds | Unstable: stability<42 or safety<32 or score<64; Brilliant: score≥92 and stability≥68 and safety≥48 | `state/evaluate.rs` | §5.4 |
 
@@ -406,20 +544,42 @@ alongside it.
 - **`src/rune_drawing/confusion_gate.rs`** — every rune template plus 10
   deterministic perturbations (translate, scale, sparse/dense resample,
   seeded jitter) must recognize as itself and be accepted, unless the
-  specific (truth, predicted) pair is in `KNOWN_CONFUSIONS` (§2.3).
+  specific (truth, predicted) pair is in `KNOWN_CONFUSIONS` (§2.3). Down to
+  one tracked entry as of Phase 1 (was four before the corner-confidence
+  softening).
 - **`src/rune_drawing/property_tests.rs`** — determinism (same input twice →
   identical `RecognitionOutcome`), translation/scale invariance, point-
-  density invariance (with the §2.5 exception), and a jitter-monotonicity
-  smoke test (more jitter should not, on average, raise quality).
+  density invariance (with the §2.5 exception), a jitter-monotonicity smoke
+  test (more jitter should not, on average, raise quality), a ~1%-jitter
+  quality-stability check, and `ambiguity_penalty_has_no_visible_cliff`
+  (no single small perturbation step should swing confidence far, sweeping
+  across the old hard-margin boundary).
+- **`src/rune_drawing/shape.rs` unit tests** — `corner_count` on hand-built
+  shapes (open line/bend, closed square/hexagon/diamond).
+- **`src/rune_drawing/tests.rs`** — `every_rune_has_a_data_driven_template`
+  and `touch_and_continuous_expose_their_extra_variants` guard the JSON
+  template table; `canonicalize_stroke_converges_regardless_of_capture_density`
+  guards §2.5's capture-time fix; `reordered_strokes_do_not_produce_spurious_mismatches`
+  and `canonical_template_draws_no_mismatch_segments` guard D3.
 - **`tests/corpus/`** — real human drawings, captured in-game via the
   Practice slate's **Capture Sample** button. `src/corpus.rs`'s
   `every_corpus_sample_recognizes_as_its_label` test holds every captured
   sample to the same bar. Empty today; grows as people playtest.
+- **`src/rune_diagram/tests.rs`** — `doubling_effect_rune_scale_raises_potency`
+  and `under_drawn_stroke_reads_but_reports_lower_potency` are Phase 2's
+  exit criteria as tests; `rune_quality_does_not_depend_on_board_position`
+  guards D1.
+- **`src/state/tests.rs`** — `doubling_effect_rune_size_raises_power_in_report`
+  is the exit criterion at the `evaluate()` level (not just `InterpretedRune`).
 
-Any change to a constant in §6 should keep all three green, or the affected
-sentence in this document (and, if it's a tracked confusion, the
+Any change to a constant in §6 should keep all of the above green, or the
+affected sentence in this document (and, if it's a tracked confusion, the
 `KNOWN_CONFUSIONS` list) should be updated in the same change.
 
 ---
 
-*Last updated: 2026-07-03 — Phase 0 of `.project/magic-symbol-system-plan.md`.*
+*Last updated: 2026-07-03 — Phase 0, Phase 1, and Phase 2 of `.project/magic-symbol-system-plan.md`.
+Phase 1 remaining: generalize the structural-check layer (§2.3) into
+data-driven rules. Phase 2 remaining: none of the plan's four items are
+outstanding, but the containment budget (§5.4) is explicitly a rough first
+cut for Phase 4 to properly balance, not a tuned final version.*

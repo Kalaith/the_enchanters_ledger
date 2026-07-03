@@ -8,6 +8,14 @@ pub(super) struct NormalizedDrawing {
 }
 
 impl NormalizedDrawing {
+    /// Arc length after normalization to the drawing's own bounding box —
+    /// scale-invariant, so comparing a candidate's to a template's isolates
+    /// "was this stroke drawn to completion" (ink_ratio) from "how big was
+    /// it drawn" (scale).
+    pub(super) fn total_length(&self) -> f32 {
+        self.total_length
+    }
+
     pub(super) fn from_strokes(strokes: &[DrawnStroke]) -> Option<Self> {
         let strokes = strokes
             .iter()
@@ -161,6 +169,22 @@ fn match_strokes_order_insensitive(
     candidate: &[Vec<StrokePoint>],
     template: &[Vec<StrokePoint>],
 ) -> Vec<f32> {
+    stroke_assignment(candidate, template)
+        .into_iter()
+        .map(|(_, score)| score)
+        .collect()
+}
+
+/// The best pairing of template strokes to distinct candidate strokes (by
+/// index into `candidate`, `None` if no candidate stroke remains), along
+/// with its similarity score — one entry per template stroke, in template
+/// order. Shared by identity scoring and anything that needs to know *which*
+/// drawn stroke matched which template stroke (e.g. mismatch highlighting),
+/// so both use the same assignment instead of two subtly different ones.
+pub(crate) fn stroke_assignment(
+    candidate: &[Vec<StrokePoint>],
+    template: &[Vec<StrokePoint>],
+) -> Vec<(Option<usize>, f32)> {
     let similarity = template
         .iter()
         .map(|template_stroke| {
@@ -171,15 +195,15 @@ fn match_strokes_order_insensitive(
         })
         .collect::<Vec<_>>();
     if candidate.len() <= MAX_OPTIMAL_ASSIGNMENT_STROKES {
-        optimal_assignment_scores(&similarity, candidate.len())
+        optimal_assignment(&similarity, candidate.len())
     } else {
-        greedy_assignment_scores(&similarity, candidate.len())
+        greedy_assignment(&similarity, candidate.len())
     }
 }
 
 /// Exact best-total pairing of template strokes to distinct candidate strokes.
 /// Greedy pairing flips on near-ties, so a tiny redraw could change the score.
-fn optimal_assignment_scores(similarity: &[Vec<f32>], candidate_count: usize) -> Vec<f32> {
+fn optimal_assignment(similarity: &[Vec<f32>], candidate_count: usize) -> Vec<(Option<usize>, f32)> {
     let template_count = similarity.len();
     let mask_count = 1usize << candidate_count;
     let mut best = vec![vec![f32::NEG_INFINITY; mask_count]; template_count + 1];
@@ -216,19 +240,19 @@ fn optimal_assignment_scores(similarity: &[Vec<f32>], candidate_count: usize) ->
                 .then_with(|| b.cmp(a))
         })
         .unwrap_or(0);
-    let mut scores = vec![0.0; template_count];
+    let mut assignment = vec![(None, 0.0); template_count];
     for row in (0..template_count).rev() {
         let picked = choice[row + 1][mask];
         if picked > 0 {
             let candidate_index = picked as usize - 1;
-            scores[row] = similarity[row][candidate_index];
+            assignment[row] = (Some(candidate_index), similarity[row][candidate_index]);
             mask &= !(1usize << candidate_index);
         }
     }
-    scores
+    assignment
 }
 
-fn greedy_assignment_scores(similarity: &[Vec<f32>], candidate_count: usize) -> Vec<f32> {
+fn greedy_assignment(similarity: &[Vec<f32>], candidate_count: usize) -> Vec<(Option<usize>, f32)> {
     let mut pairs = Vec::new();
     for (template_index, row) in similarity.iter().enumerate() {
         for (candidate_index, score) in row.iter().enumerate() {
@@ -242,15 +266,15 @@ fn greedy_assignment_scores(similarity: &[Vec<f32>], candidate_count: usize) -> 
     });
 
     let mut used_candidates = vec![false; candidate_count];
-    let mut scores = vec![0.0; similarity.len()];
+    let mut assignment = vec![(None, 0.0); similarity.len()];
     for (score, candidate_index, template_index) in pairs {
-        if used_candidates[candidate_index] || scores[template_index] > 0.0 {
+        if used_candidates[candidate_index] || assignment[template_index].0.is_some() {
             continue;
         }
         used_candidates[candidate_index] = true;
-        scores[template_index] = score;
+        assignment[template_index] = (Some(candidate_index), score);
     }
-    scores
+    assignment
 }
 
 fn stroke_similarity(candidate: &[StrokePoint], template: &[StrokePoint]) -> f32 {
