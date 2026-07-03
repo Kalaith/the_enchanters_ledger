@@ -152,8 +152,15 @@ pub fn recognize_rune<'a>(
     let mut scores = runes
         .into_iter()
         .filter_map(|rune| {
+            // Cheap pre-filter (plan Phase 3 item 6 / perf budget): a template variant whose
+            // stroke count is wildly different from what was drawn has no realistic chance of
+            // winning (missing/extra-stroke penalties in `score_against_template` already push
+            // it toward the acceptance floor), so skip the full normalize-and-score pass for it
+            // — this matters once a diagram's hundreds of small clusters are each scored against
+            // every rune's every variant.
             let best_score = template_variants_for_rune(&rune.id)
                 .into_iter()
+                .filter(|template| template.len().abs_diff(strokes.len()) <= 2)
                 .filter_map(|template| NormalizedDrawing::from_strokes(&template))
                 .map(|template| adjusted_score_for_rune(&rune.id, &strokes, &candidate, &template))
                 .max_by(|a, b| a.total_cmp(b))?;

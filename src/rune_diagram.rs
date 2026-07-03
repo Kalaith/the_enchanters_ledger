@@ -2,25 +2,21 @@
 
 use crate::data::RuneDef;
 use crate::magical_circle::{
-    analyze_magical_circle, classify_circle_stroke, CircleBounds, CircleMark, CircleStrokeKind,
-    MagicalCircleSpell,
+    analyze_magical_circle, CircleMark, CircleStrokeKind, MagicalCircleSpell,
 };
-use crate::rune_drawing::{recognize_rune, DrawnStroke, StrokePoint};
+use crate::rune_drawing::{DrawnStroke, StrokePoint};
 use serde::{Deserialize, Serialize};
 
 mod circle;
 mod geometry;
 mod recognition;
+mod scope;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use circle::{
-    circle_quality, is_inside_working_circle, select_working_circle_for_strokes,
-};
+pub(crate) use circle::{gather_circle_candidates, is_inside_working_circle, select_working_circle_for_strokes};
 pub(crate) use geometry::{cluster_strokes, StrokeBounds};
-use recognition::{
-    extract_overlapped_spheres, push_recognized_rune, recover_contaminated_multi_stroke_rune,
-};
+use scope::interpret_scope;
 
 pub const MIN_CIRCLE_QUALITY: f32 = 0.32;
 pub const MIN_DIAGRAM_RUNE_CONFIDENCE: f32 = 0.32;
@@ -91,14 +87,8 @@ pub fn interpret_diagram<'a>(
         .filter(|(_, stroke)| stroke.has_ink())
         .collect::<Vec<_>>();
 
-    let circle_candidates = useful
-        .iter()
-        .filter_map(|(index, stroke)| {
-            let bounds = StrokeBounds::from_stroke(stroke)?;
-            circle_quality(stroke, bounds).map(|score| (*index, score, bounds))
-        })
-        .collect::<Vec<_>>();
-    let Some((circle_index, circle_quality, circle_bounds)) =
+    let circle_candidates = gather_circle_candidates(&useful);
+    let Some((circle_member_indices, circle_quality, circle_bounds)) =
         select_working_circle_for_strokes(&circle_candidates, &useful)
     else {
         return DiagramInterpretation {
@@ -109,66 +99,15 @@ pub fn interpret_diagram<'a>(
 
     let circle_found = circle_quality >= MIN_CIRCLE_QUALITY;
     let available_runes = runes.into_iter().collect::<Vec<_>>();
-    let spell_bounds = CircleBounds::new(
-        circle_bounds.min_x,
-        circle_bounds.min_y,
-        circle_bounds.max_x,
-        circle_bounds.max_y,
-    );
-    let classified_marks = useful
-        .iter()
-        .filter(|(index, _)| *index != circle_index)
-        .filter_map(|(index, stroke)| {
-            classify_circle_stroke(stroke, spell_bounds).map(|mark| (*index, mark))
-        })
-        .collect::<Vec<_>>();
-    let inner_strokes = useful
+    let scope_ink = useful
         .into_iter()
-        .filter(|(index, stroke)| {
-            *index != circle_index
-                && is_inside_working_circle(stroke, circle_bounds)
-                && !is_circle_structure(*index, &classified_marks)
-        })
+        .filter(|(index, _)| !circle_member_indices.contains(index))
         .map(|(index, stroke)| (index, stroke.clone()))
         .collect::<Vec<_>>();
 
-    let clusters = cluster_strokes(&inner_strokes);
-    let mut interpreted = Vec::new();
-    let mut rejected_marks = 0;
-    for cluster in clusters {
-        if extract_overlapped_spheres(
-            &cluster,
-            &available_runes,
-            circle_bounds,
-            &mut interpreted,
-            &mut rejected_marks,
-        ) {
-            continue;
-        }
-        if recover_contaminated_multi_stroke_rune(
-            &cluster,
-            &available_runes,
-            circle_bounds,
-            &mut interpreted,
-            &mut rejected_marks,
-        ) {
-            continue;
-        }
-
-        let Some(recognized) = recognize_rune(&cluster.strokes, available_runes.iter().copied())
-        else {
-            rejected_marks += 1;
-            continue;
-        };
-        push_recognized_rune(
-            recognized,
-            cluster.bounds,
-            circle_bounds,
-            &available_runes,
-            &mut interpreted,
-            &mut rejected_marks,
-        );
-    }
+    let outcome = interpret_scope(&scope_ink, circle_bounds, &available_runes, 0);
+    let mut interpreted = outcome.runes;
+    let rejected_marks = outcome.rejected_marks;
 
     interpreted.sort_by(|a, b| {
         a.center
@@ -176,10 +115,7 @@ pub fn interpret_diagram<'a>(
             .total_cmp(&b.center.y)
             .then(a.center.x.total_cmp(&b.center.x))
     });
-    let circle_marks = classified_marks
-        .into_iter()
-        .map(|(_, mark)| mark)
-        .collect::<Vec<_>>();
+    let circle_marks = outcome.circle_marks;
     let spell = if circle_found {
         analyze_magical_circle(
             circle_quality,

@@ -150,6 +150,21 @@ pub fn classify_circle_stroke(stroke: &DrawnStroke, circle: CircleBounds) -> Opt
     };
     let length_ratio = stroke_length(&stroke.points) / average_radius(circle).max(0.001);
     let radial = radial_score(stroke, circle);
+    // Plan Phase 3 item 4 (C1/C2): a perimeter tick or script mark is a small, near-straight,
+    // minimally-sampled flick (2-3 points; see the structure-mark test fixtures in
+    // rune_diagram::tests) — `directness` and the point-count ceiling below are what actually
+    // distinguish decorative structure ink from a small *rune* drawn at the same
+    // orbit/scale/length, which usually has at least one real corner and more sampled shape
+    // (e.g. `spark`'s 4-point zigzag). Without this, a diagram with many small legitimate runes
+    // could see them swept into these structure-mark buckets (and excluded from rune recognition
+    // entirely) purely by being small and numerous — exactly the "structure vs. rune ink by
+    // size" failure mode the plan calls out.
+    let directness = if stroke.points.len() >= 2 {
+        distance(*stroke.points.first().unwrap(), *stroke.points.last().unwrap())
+            / stroke_length(&stroke.points).max(0.001)
+    } else {
+        0.0
+    };
 
     let kind = if closed && orbit <= 0.15 && (0.28..=0.92).contains(&scale) && circle_shape > 0.48 {
         CircleStrokeKind::ReinforcementRing
@@ -160,9 +175,19 @@ pub fn classify_circle_stroke(stroke: &DrawnStroke, circle: CircleBounds) -> Opt
         && circle_shape > 0.42
     {
         CircleStrokeKind::SatelliteSeal
-    } else if (0.78..=1.10).contains(&orbit) && scale <= 0.13 && length_ratio <= 0.30 {
+    } else if (0.78..=1.10).contains(&orbit)
+        && scale <= 0.13
+        && length_ratio <= 0.30
+        && directness > 0.65
+        && stroke.points.len() <= 3
+    {
         CircleStrokeKind::PerimeterMark
-    } else if (0.18..=0.88).contains(&orbit) && scale <= 0.075 && length_ratio <= 0.20 {
+    } else if (0.18..=0.88).contains(&orbit)
+        && scale <= 0.075
+        && length_ratio <= 0.20
+        && directness > 0.65
+        && stroke.points.len() <= 3
+    {
         CircleStrokeKind::ScriptMark
     } else if radial > 0.68 {
         CircleStrokeKind::RadialSpoke

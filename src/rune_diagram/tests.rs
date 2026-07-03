@@ -349,6 +349,125 @@ fn interprets_high_tier_structured_circle_spell() {
     assert!(spell.script_mark_count >= 32, "{spell:?}");
 }
 
+#[test]
+fn hundred_plus_symbol_diagram_round_trips_within_perf_budget_and_order_independence() {
+    // Phase 3 exit criterion: a synthetic ~120-symbol diagram (small "spark" runes packed on a
+    // grid inside the working circle) round-trips — every symbol found, none merged/eaten — and
+    // completes well inside a generous sanity budget. This is a debug `cargo test` run, so the
+    // time bound is a "doesn't regress asymptotically / hang" check, not the plan doc's
+    // native-release ~100ms target. Also exercises items 2/5's order-independence together:
+    // reversing the draw order must not change which runes are found.
+    let data = GameData::load().unwrap();
+    let sparks = small_rune_grid("spark", 120, 0.055, 0.028);
+    assert!(sparks.len() >= 100, "grid only placed {} sparks", sparks.len());
+
+    let mut strokes = outer_circle();
+    strokes.extend(sparks.clone());
+
+    let start = std::time::Instant::now();
+    let interpretation = interpret_diagram(&strokes, rank_one(&data));
+    let elapsed = start.elapsed();
+
+    assert!(interpretation.accepted(), "{interpretation:?}");
+    assert_eq!(
+        interpretation.runes.len(),
+        sparks.len(),
+        "found {} of {} sparks: {:?}",
+        interpretation.runes.len(),
+        sparks.len(),
+        interpretation.runes
+    );
+    assert!(
+        interpretation.runes.iter().all(|rune| rune.rune_id == "spark"),
+        "{:?}",
+        interpretation.runes
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "interpret_diagram took {elapsed:?} for a {}-stroke diagram",
+        strokes.len()
+    );
+
+    let mut shuffled = strokes;
+    shuffled[1..].reverse();
+    let shuffled_interpretation = interpret_diagram(&shuffled, rank_one(&data));
+    assert_eq!(
+        shuffled_interpretation.runes.len(),
+        interpretation.runes.len(),
+        "reversing draw order changed how many runes were found"
+    );
+}
+
+/// Places up to `count_target` instances of `rune_id` on a grid inside the working circle drawn
+/// by `outer_circle()`, spaced far enough apart (relative to their own drawn size) to stay
+/// distinct clusters — see `rune_diagram::geometry::cluster_thresholds`.
+fn small_rune_grid(rune_id: &str, count_target: usize, spacing: f32, scale: f32) -> Vec<DrawnStroke> {
+    let mut strokes = Vec::new();
+    let steps = (0.80 / spacing).ceil() as i32 + 1;
+    'grid: for row in -steps..=steps {
+        for col in -steps..=steps {
+            let x = 0.50 + col as f32 * spacing;
+            let y = 0.50 + row as f32 * spacing;
+            let nx = (x - 0.50) / 0.40;
+            let ny = (y - 0.50) / 0.38;
+            if nx * nx + ny * ny > 1.0 {
+                continue;
+            }
+            strokes.extend(template_at(rune_id, x, y, scale));
+            if strokes.len() >= count_target {
+                break 'grid;
+            }
+        }
+    }
+    strokes
+}
+
+#[test]
+fn rune_far_below_old_twelve_percent_scale_floor_still_reads() {
+    // Phase 3 item 4 exit criterion (C1/C2): a rune drawn at ~4% of the working circle's scale
+    // — well under the old, now-removed `MIN_RUNE_SCALE_IN_CIRCLE` (0.12) floor — must still be
+    // found. This is the scale a 100+-symbol grand diagram needs most of its runes drawn at.
+    let data = GameData::load().unwrap();
+    let mut strokes = outer_circle();
+    strokes.extend(template_at("spark", 0.30, 0.30, 0.035));
+
+    let interpretation = interpret_diagram(&strokes, rank_one(&data));
+    let ids = interpretation
+        .runes
+        .iter()
+        .map(|rune| rune.rune_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(interpretation.accepted(), "{interpretation:?}");
+    assert!(ids.contains(&"spark"), "{ids:?}");
+}
+
+#[test]
+fn nested_off_center_ring_reads_its_own_effect_rune_relative_to_its_own_scope() {
+    // Phase 3 item 2 exit criterion: an off-center sub-circle (a "vent" in a volcano-style
+    // diagram) enclosing its own ink is interpreted as its own scope, so the rune inside it is
+    // scored relative to the *sub-circle*, not the outer working circle. Drawn at 0.16 slate
+    // units, "light" reads at roughly reference size (scale ~0.19, ratio ~1.0) against the huge
+    // outer circle but oversized (scale ~0.5+, ratio ~2.9) against the much smaller sub-circle —
+    // so a large reported scale/potency here is direct evidence recursion, not the outer circle,
+    // supplied the reference frame.
+    let data = GameData::load().unwrap();
+    let mut strokes = outer_circle();
+    strokes.extend(rough_circle(0.30, 0.30, 0.15, 0.14, 24));
+    strokes.extend(template_at("light", 0.30, 0.30, 0.16));
+
+    let interpretation = interpret_diagram(&strokes, rank_one(&data));
+    let light = interpretation
+        .runes
+        .iter()
+        .find(|rune| rune.rune_id == "light");
+
+    assert!(interpretation.accepted(), "{interpretation:?}");
+    let light = light.unwrap_or_else(|| panic!("{interpretation:?}"));
+    assert!(light.scale > 0.35, "{light:?}");
+    assert!(light.potency > 1.5, "{light:?}");
+}
+
 fn touch_quality_at(x: f32, y: f32, data: &GameData) -> f32 {
     let mut strokes = outer_circle();
     strokes.extend(template_at("touch", x, y, 0.18));

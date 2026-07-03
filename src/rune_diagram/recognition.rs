@@ -1,4 +1,4 @@
-use super::geometry::{StrokeBounds, StrokeCluster};
+use super::geometry::{cluster_strokes, distance, StrokeBounds, StrokeCluster};
 use super::{InterpretedRune, MIN_DIAGRAM_RUNE_CONFIDENCE};
 use crate::data::{RuneCategory, RuneDef};
 use crate::rune_drawing::{
@@ -6,7 +6,16 @@ use crate::rune_drawing::{
 };
 
 const MIN_RECOVERED_RUNE_CONFIDENCE: f32 = 0.52;
-const MIN_RUNE_SCALE_IN_CIRCLE: f32 = 0.12;
+/// Minimum total point count across a cluster's strokes for it to be scored as a rune at all —
+/// replaces the old absolute `MIN_RUNE_SCALE_IN_CIRCLE` size floor (plan Phase 3 item 4 / C1,
+/// C2): a legible rune is one with enough sampled shape detail, not one drawn above some
+/// fraction of the working circle. A 100+-symbol diagram needs runes at 3-6% circle scale, which
+/// the old 12% floor rejected outright regardless of how clean the shape was; a point-count
+/// floor still rejects genuinely degenerate flicks (2-3 points) without penalizing a small but
+/// carefully-traced rune. 4 is the lowest total point count among any real rune template
+/// (`spark`, `cone` — see `assets/data/rune_templates.json`), so this floor never rejects a rune
+/// drawn cleanly at its own canonical shape.
+const MIN_RUNE_CLUSTER_POINTS: usize = 4;
 
 pub(super) fn extract_overlapped_spheres(
     cluster: &StrokeCluster,
@@ -47,6 +56,7 @@ pub(super) fn extract_overlapped_spheres(
                 recognized,
                 bounds,
                 circle_bounds,
+                stroke.points.len(),
                 available_runes,
                 interpreted,
                 rejected_marks,
@@ -74,6 +84,7 @@ pub(super) fn extract_overlapped_spheres(
                 recognized,
                 bounds,
                 circle_bounds,
+                total_points(&remaining),
                 available_runes,
                 interpreted,
                 rejected_marks,
@@ -101,13 +112,14 @@ pub(super) fn recover_contaminated_multi_stroke_rune(
     {
         return false;
     }
-    let Some(recovery) = best_recovery_window(cluster, available_runes, circle_bounds) else {
+    let Some(recovery) = best_recovery_window(cluster, available_runes) else {
         return false;
     };
     push_recognized_rune(
         recovery.recognized,
         recovery.bounds,
         circle_bounds,
+        recovery.total_points,
         available_runes,
         interpreted,
         rejected_marks,
@@ -120,25 +132,33 @@ struct RecoveredWindow {
     recognized: RecognitionOutcome,
     bounds: StrokeBounds,
     stroke_count: usize,
+    total_points: usize,
 }
 
+/// Best contiguous *spatially-ordered* window of `cluster`'s strokes that recognizes as an
+/// accepted multi-stroke effect rune — a bounded fallback for clusters contaminated by extra,
+/// unrelated ink (plan issue A5). Windows over `spatial_order`, not `cluster.strokes`' original
+/// draw order (plan Phase 3 item 5 / A2): drawing the same rune's strokes in a different order,
+/// or interleaved with the contaminating ink at different points, no longer changes which window
+/// is found.
 fn best_recovery_window(
     cluster: &StrokeCluster,
     available_runes: &[&RuneDef],
-    circle_bounds: StrokeBounds,
 ) -> Option<RecoveredWindow> {
+    let ordered = spatial_order(cluster);
     let mut best = None::<RecoveredWindow>;
 
-    for start in 0..cluster.strokes.len() {
-        for end in (start + 2)..=cluster.strokes.len() {
-            if start == 0 && end == cluster.strokes.len() {
+    for start in 0..ordered.len() {
+        for end in (start + 2)..=ordered.len() {
+            if start == 0 && end == ordered.len() {
                 continue;
             }
-            let strokes = &cluster.strokes[start..end];
+            let strokes = &ordered[start..end];
             let Some(bounds) = StrokeBounds::from_strokes(strokes) else {
                 continue;
             };
-            if bounds.scale_relative(circle_bounds) < MIN_RUNE_SCALE_IN_CIRCLE {
+            let points = total_points(strokes);
+            if points < MIN_RUNE_CLUSTER_POINTS {
                 continue;
             }
             let Some(recognized) = recognize_rune(strokes, available_runes.iter().copied()) else {
@@ -151,6 +171,7 @@ fn best_recovery_window(
                 recognized,
                 bounds,
                 stroke_count: strokes.len(),
+                total_points: points,
             };
             if best.as_ref().is_none_or(|current| {
                 candidate.stroke_count > current.stroke_count
@@ -167,6 +188,51 @@ fn best_recovery_window(
     }
 
     best
+}
+
+/// A greedy nearest-neighbor visiting order over `cluster`'s strokes (by bounding-box center),
+/// starting from the lowest-indexed stroke for determinism and always stepping to whichever
+/// unvisited stroke is spatially closest (ties broken by original index). Used by
+/// `best_recovery_window` in place of original draw order.
+fn spatial_order(cluster: &StrokeCluster) -> Vec<DrawnStroke> {
+    let bounds = cluster
+        .strokes
+        .iter()
+        .map(StrokeBounds::from_stroke)
+        .collect::<Vec<_>>();
+    let Some(mut current) = (0..cluster.strokes.len()).find(|index| bounds[*index].is_some())
+    else {
+        return cluster.strokes.clone();
+    };
+    let mut visited = vec![false; cluster.strokes.len()];
+    let mut order = vec![current];
+    visited[current] = true;
+
+    for _ in 1..cluster.strokes.len() {
+        let Some(current_center) = bounds[current].map(StrokeBounds::center) else {
+            break;
+        };
+        let Some(next) = (0..cluster.strokes.len())
+            .filter(|index| !visited[*index])
+            .min_by(|a, b| {
+                let a_distance =
+                    bounds[*a].map_or(f32::INFINITY, |ab| distance(current_center, ab.center()));
+                let b_distance =
+                    bounds[*b].map_or(f32::INFINITY, |bb| distance(current_center, bb.center()));
+                a_distance.total_cmp(&b_distance).then_with(|| a.cmp(b))
+            })
+        else {
+            break;
+        };
+        order.push(next);
+        visited[next] = true;
+        current = next;
+    }
+
+    order
+        .into_iter()
+        .map(|index| cluster.strokes[index].clone())
+        .collect()
 }
 
 fn is_recoverable_multi_stroke_rune(
@@ -191,48 +257,44 @@ fn is_recoverable_multi_stroke_rune(
     template.len() >= 3 && stroke_count == template.len()
 }
 
+/// The strokes left in `cluster` once `removed_local_indices` (the sphere strokes
+/// `extract_overlapped_spheres` already pulled out) are set aside, regrouped by spatial
+/// proximity — never by original draw-stroke-index adjacency (plan Phase 3 item 5 / A2): drawing
+/// stroke 1 of one rune, then a second rune, then finishing the first rune no longer changes
+/// which strokes end up grouped together. Reuses `cluster_strokes`, the same spatial grouping the
+/// rest of diagram interpretation is built on, rather than a bespoke index-window heuristic.
 fn remaining_stroke_groups(
     cluster: &StrokeCluster,
     removed_local_indices: &[usize],
 ) -> Vec<Vec<DrawnStroke>> {
-    let mut groups = Vec::new();
-    let mut current = Vec::new();
-    let mut last_original_index = None;
-
-    for (local_index, (original_index, stroke)) in
-        cluster.indices.iter().zip(&cluster.strokes).enumerate()
-    {
-        if removed_local_indices.contains(&local_index) {
-            if !current.is_empty() {
-                groups.push(std::mem::take(&mut current));
-            }
-            last_original_index = None;
-            continue;
-        }
-        if last_original_index.is_some_and(|last| *original_index != last + 1)
-            && !current.is_empty()
-        {
-            groups.push(std::mem::take(&mut current));
-        }
-        current.push(stroke.clone());
-        last_original_index = Some(*original_index);
-    }
-
-    if !current.is_empty() {
-        groups.push(current);
-    }
-    groups
+    let remaining = cluster
+        .indices
+        .iter()
+        .zip(&cluster.strokes)
+        .enumerate()
+        .filter(|(local_index, _)| !removed_local_indices.contains(local_index))
+        .map(|(_, (original_index, stroke))| (*original_index, stroke.clone()))
+        .collect::<Vec<_>>();
+    cluster_strokes(&remaining)
+        .into_iter()
+        .map(|group| group.strokes)
+        .collect()
 }
 
 pub(super) fn push_recognized_rune(
     recognized: RecognitionOutcome,
     bounds: StrokeBounds,
     circle_bounds: StrokeBounds,
+    total_points: usize,
     available_runes: &[&RuneDef],
     interpreted: &mut Vec<InterpretedRune>,
     rejected_marks: &mut usize,
 ) {
     if recognized.confidence < MIN_DIAGRAM_RUNE_CONFIDENCE {
+        *rejected_marks += 1;
+        return;
+    }
+    if total_points < MIN_RUNE_CLUSTER_POINTS {
         *rejected_marks += 1;
         return;
     }
@@ -243,10 +305,6 @@ pub(super) fn push_recognized_rune(
         .iter()
         .find(|rune| rune.id == recognized.rune_id)
         .map(|rune| rune.category);
-    if scale < MIN_RUNE_SCALE_IN_CIRCLE {
-        *rejected_marks += 1;
-        return;
-    }
     // D1/D2: this rune's *shape* quality is no longer multiplied by circle
     // quality or board-position layout here — that stacked three
     // independently-meaningful scores into one opaque number (plan issue
@@ -291,6 +349,10 @@ fn potency_from_scale_ratio(ratio: f32) -> f32 {
     } else {
         1.0 + (ratio - 1.0) * 0.6
     }
+}
+
+fn total_points(strokes: &[DrawnStroke]) -> usize {
+    strokes.iter().map(|stroke| stroke.points.len()).sum()
 }
 
 fn normalized_orbit(center: StrokePoint, circle_bounds: StrokeBounds) -> f32 {

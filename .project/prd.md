@@ -11,16 +11,20 @@
 > `src/rune_drawing/property_tests.rs`, or `tests/corpus/`.
 >
 > Written as Phase 0 of `.project/magic-symbol-system-plan.md`, updated
-> through Phase 2. It documents the system **as it exists today**: Hungarian
+> through Phase 3. It documents the system **as it exists today**: Hungarian
 > stroke assignment, open-stroke corner fix, eraser-fragment merge,
 > strict/identity variant parity, deterministic tie-breaks, mismatch-segment
 > alignment (D3), a continuous (not stepped) ambiguity penalty and corner
 > confidence, capture-time stroke canonicalization (A8), rune templates
 > moved to `assets/data/rune_templates.json`, a real size/completeness
-> magnitude channel (`potency`, §4), and the D1/D2 scoring-stack cleanup
-> (layout-position bias deleted, circle quality now additive not stacked).
+> magnitude channel (`potency`, §4), the D1/D2 scoring-stack cleanup
+> (layout-position bias deleted, circle quality now additive not stacked),
+> multi-stroke circle assembly, a recursive containment hierarchy for nested
+> scopes, scale-relative (not absolute) clustering with a spatial grid,
+> geometry-driven (not size-driven) structure-vs-rune classification, and
+> pure spatial (not draw-order) stroke grouping (§5).
 > It is not a design proposal — proposals live in the plan document's
-> Phase 3–5 sections (Phase 1's
+> Phase 4–5 sections (Phase 1's
 > generic/data-driven *structural checks* — as opposed to template shapes,
 > which are already data-driven — remain future work; see §2.3). This doc
 > is also the intended source for in-game journal/tutorial copy once
@@ -36,10 +40,12 @@ The player enchants items by freehand-drawing runes inside a working circle.
 The drawing has to be readable by a recognizer with no hand-authored
 per-drawing hints, robust to ordinary hand-drawing noise, and — eventually —
 scale from a 3-symbol fireball to a 100+-symbol grand diagram (see the plan
-document's goal statement). Today's system covers single-symbol recognition
-and small structured circles solidly; it does not yet scale to hundreds of
-symbols or reward size/length as a magnitude channel. Both are tracked in
-the plan (Phases 2–4), not here.
+document's goal statement). Single-symbol recognition (§2–3), the magnitude
+channel (§4), and — as of Phase 3 — scaling a structured circle to hundreds
+of small symbols (§5) are all in place. What's still missing is a real
+compositional *grammar* (a spell as a data-defined predicate over the
+diagram, not a stat-blob-plus-lookup) and a properly balanced containment
+budget — both tracked as Phase 4, not here (§5.5).
 
 ### 1.2 Vocabulary
 
@@ -327,24 +333,34 @@ to the player — not before.
 
 ## 5. Circle grammar — structured diagrams
 
-`interpret_diagram()` (`src/rune_diagram.rs`) reads a full drawing as: pick
-the working circle → classify every other stroke as rune ink or a structure
-mark → cluster rune ink into rune groups → recognize each cluster →
-summarize into a spell via `analyze_magical_circle()`
-(`src/magical_circle.rs`).
+`interpret_diagram()` (`src/rune_diagram.rs`) picks the working circle, then
+hands everything inside it to `interpret_scope()`
+(`src/rune_diagram/scope.rs`, §5.6): classify every stroke as rune ink or a
+structure mark → recurse into any nested sub-scope it finds → cluster the
+remaining rune ink into rune groups → recognize each cluster. The result
+feeds `analyze_magical_circle()` (`src/magical_circle.rs`) for the spell
+summary.
 
 ### 5.1 Working circle
 
-- Must be drawn as a **single stroke** today (Phase 3 item 1 — chaining
-  multi-arc circles — is not implemented). Candidate strokes need ≥8
-  points and a span ≥0.22 with width/height ≥0.15 to even be considered
-  (`circle.rs:49-75`).
-- `circle_quality` is a weighted sum (`circle.rs`): closure 32%, aspect
-  18%, center-proximity 4%, radius consistency 22%, angular coverage 18%,
-  top-start bias 8%. `circle_found` requires `circle_quality ≥
-  MIN_CIRCLE_QUALITY (0.32)`. When several closed strokes are candidates,
-  the one enclosing the most other ink wins, tie-broken by meeting the
-  quality floor, then span, then raw quality.
+- May be drawn as a **single stroke, or chained from 2-4 open arcs whose
+  endpoints nearly touch** (`assemble_multi_stroke_circles`, `circle.rs`,
+  Phase 3 item 1 / C5) — a circle repaired mid-draw, or drawn in several
+  passes, is scored exactly like a one-stroke circle once the arcs are
+  merged into one polyline. No direction/turn-angle check gates the join
+  (unlike `rune_drawing`'s continuation merge): arcs of a circle are
+  expected to turn continuously, so requiring a nearly-straight join would
+  reject exactly the shapes this exists to catch. Only strokes with a span
+  ≥0.08 are considered possible arcs, keeping this cheap even with hundreds
+  of small rune strokes elsewhere in the drawing.
+- Single-stroke candidates still need ≥8 points and a span ≥0.22 with
+  width/height ≥0.15 to be considered at all (`circle.rs`). `circle_quality`
+  is a weighted sum: closure 32%, aspect 18%, center-proximity 4%, radius
+  consistency 22%, angular coverage 18%, top-start bias 8%. `circle_found`
+  requires `circle_quality ≥ MIN_CIRCLE_QUALITY (0.32)`. Among all
+  candidates (single-stroke and chained), the one enclosing the most other
+  ink wins, tie-broken by meeting the quality floor, then span, then raw
+  quality, then (for a chained candidate) its highest member stroke index.
 - A candidate rune only counts as "inside" the circle if (a) its center,
   normalized to the circle's elliptical radii, satisfies `nx² + ny² ≤
   1.25`, **and** (b) its width and height are each under `0.92×` the
@@ -355,39 +371,59 @@ summarize into a spell via `analyze_magical_circle()`
 
 ### 5.2 Structure marks vs. rune ink
 
-Every non-rune stroke is first classified by its geometry relative to the
-circle (`classify_circle_stroke`, `magical_circle.rs:134-195`), using
-`orbit` (distance from center, normalized to the circle's radius) and
-`scale` (stroke size relative to the circle):
+Every non-rune stroke is first classified by its geometry relative to its
+scope (`classify_circle_stroke`, `magical_circle.rs`), using `orbit`
+(distance from center, normalized to the scope's radius) and `scale`
+(stroke size relative to the scope):
 
 | Classification | Condition |
 |---|---|
 | `ReinforcementRing` | closed, `orbit ≤ 0.15`, `scale` 0.28–0.92 |
 | `SatelliteSeal` | closed, ≥12 points, `orbit` 0.22–0.78, `scale` 0.055–0.24 |
-| `PerimeterMark` | `orbit` 0.78–1.10, `scale ≤ 0.13`, short |
-| `ScriptMark` | `orbit` 0.18–0.88, `scale ≤ 0.075`, very short |
+| `PerimeterMark` | `orbit` 0.78–1.10, `scale ≤ 0.13`, short, `directness > 0.65`, ≤3 points |
+| `ScriptMark` | `orbit` 0.18–0.88, `scale ≤ 0.075`, very short, `directness > 0.65`, ≤3 points |
 | `RadialSpoke` | directness > 0.86, spans center → ring |
 | `RuneInk` | none of the above |
 
+`directness` (start-to-end distance ÷ total arc length) and the ≤3-point
+cap are Phase 3 item 4 additions (C1/C2): a real perimeter tick or script
+mark is a small, near-straight, minimally-sampled flick (matching the
+structure-mark test fixtures — see §7), while even a small drawn *rune*
+usually has at least one real corner and more sampled shape (`spark`'s
+4-point zigzag, for instance). Without this, a diagram with many small
+legitimate runes at the same orbit/scale/length as decorative ticks could
+have them swept into these structure-mark buckets — and excluded from rune
+recognition entirely — purely by being small and numerous, which is exactly
+the failure mode the plan calls "structure vs. rune ink by size, not
+geometry."
+
 A mark only actually counts as circle *structure* (and gets excluded from
 rune clustering) once its kind clears a population threshold
-(`is_circle_structure`, `rune_diagram.rs:186-217`): satellites need ≥3 at
-quality > 0.68; rings need ≥2 at quality > 0.48; scripts need ≥8 at quality
-> 0.42; radials need ≥6 at quality > 0.68. Below threshold, the marks are
-just left as unrecognized ink, not reclassified as runes.
+(`is_circle_structure`, `rune_diagram.rs`): satellites need ≥3 at quality
+> 0.68; rings need ≥2 at quality > 0.48; scripts need ≥8 at quality > 0.42;
+radials need ≥6 at quality > 0.68. Below threshold, the marks are just left
+as unrecognized ink, not reclassified as runes.
 
-`MIN_RUNE_SCALE_IN_CIRCLE = 0.12` (`rune_diagram/recognition.rs:9`) is the
-separate, harder floor applied when a cluster *is* being scored as a rune:
-if its scale relative to the circle is under 12%, it's rejected outright
-regardless of recognition confidence. Between this floor and the
-`ScriptMark` classification catching most small marks first, **dense
-diagrams with many small runes are not possible today** (C1/C2) — this is
-the single largest blocker to the "100+ symbols" goal and is Phase 3's job,
-not Phase 0's. Rune-level clustering itself (grouping strokes that belong
-to the same rune) uses fixed absolute thresholds, not scale-relative ones:
-`MAX_CLUSTER_STROKE_DISTANCE = 0.045` (segment-to-segment) and
-`MAX_CLUSTER_CENTER_DISTANCE = 0.09` (bounding-box centers) — this is C3,
-also Phase 3 scope.
+**Resolved as of Phase 3 (C1/C2):** the old `MIN_RUNE_SCALE_IN_CIRCLE`
+(0.12) absolute-scale floor on recognized rune clusters is gone. In its
+place, `MIN_RUNE_CLUSTER_POINTS` (4 — see §6) requires only that a
+cluster's strokes carry enough sampled points to be legible at all; 4 is
+the lowest total point count among any real rune template (`spark`,
+`cone`), so this never rejects a rune drawn cleanly at its own shape,
+however small. Combined with the directness/point-count gate above and
+scale-relative clustering (below), a rune can now be drawn at 3-6% circle
+scale and still read — the blocker the plan called "the single largest
+blocker to the 100+ symbols goal" is resolved.
+
+**Resolved as of Phase 3 (C3, C4):** rune-level clustering
+(`cluster_strokes`, `rune_diagram/geometry.rs`) no longer uses fixed
+absolute distance thresholds. Each stroke pair's center- and
+stroke-distance limits now scale off the pair's own bounding-box
+diagonal(s) — see §5.7 for the exact rule and why it isn't a single linear
+formula. A spatial hash grid (bucketing by bounds-center, searching only
+same/adjacent cells) replaces the old all-pairs scan, and a cheap
+bounding-box-gap pre-check skips the expensive segment-to-segment distance
+scan whenever the boxes alone are already too far apart.
 
 ### 5.3 Spell stat blob
 
@@ -477,20 +513,122 @@ rebalancing to stay meaningfully "rough" under the new, more transparent
 scoring. Expect other hand-tuned test fixtures/thresholds to need similar
 recalibration as this system's constants keep moving.
 
-### 5.5 What circle grammar does *not* yet have
+### 5.5 Containment hierarchy — nested scopes (Phase 3 item 2)
 
-- **Sub-scopes / nested circles.** A circle drawn inside a circle isn't
-  interpreted as a nested composite glyph — this is the structural unlock
-  Phase 3 item 2 targets, needed to express a "volcano"-scale diagram
-  hierarchically instead of flatly.
+**Resolved, first cut.** A closed ring found inside a scope that also
+encloses ink of its own is no longer just a `ReinforcementRing` decoration
+— it's recursively interpreted as its own scope
+(`interpret_scope`/`nested_ring_candidates`, `src/rune_diagram/scope.rs`),
+exactly like the top-level working circle. This is the structural unlock
+for a "volcano"-scale diagram: a working circle can enclose several
+off-center vents, each with its own effect rune, and every rune reads at
+*its own* scope's scale/orbit (§4.1's `scale`), not the outer circle's —
+`InterpretedRune::center` was already absolute slate coordinates and
+`scale`/`orbit` already relative to whatever bounds they were scored
+against, so recursion needed no new fields, just a recursive call.
+
+A ring qualifies as a nested scope only if **both**:
+
+- its scale relative to its parent scope is `0.28..=0.90` (the same band
+  `ReinforcementRing` uses — a nested scope *is* a reinforcement ring that
+  also happens to enclose ink of its own), and
+- it sits clearly **off-center**: orbit `≥ 0.20` (`NESTED_RING_MIN_ORBIT`,
+  just above `ReinforcementRing`'s own `orbit ≤ 0.15` band).
+
+The orbit requirement exists specifically so the game's existing
+"concentric reinforcement ring stack" idiom (several closed rings sharing
+the working circle's own center — see the high-tier city-shield fixture in
+§7) is **not** reinterpreted as nested scopes: those rings stay plain
+decoration, exactly as before. Only a genuinely separate sub-circle, drawn
+off to one side, recurses. Ring *shape* fidelity itself is scored with
+`ring_shape_score` (`circle.rs`) rather than `circle_quality` — the same
+closure/aspect/radius/coverage math, but without `circle_quality`'s
+absolute slate-space size floor (meaningless for a ring whose absolute size
+is only ever a fraction of its parent) and without the "near the middle of
+the whole slate" term (meaningless for a ring that can sit anywhere inside
+its parent).
+
+Recursion is capped at `MAX_SCOPE_DEPTH = 3` to bound worst-case cost on
+degenerate geometry. Nested scopes are a **first cut**: they fold their
+runes into one flat list (which `analyze_magical_circle` already consumes
+via each rune's own scale/orbit) rather than becoming named nodes in a
+compositional grammar — see §5.7.
+
+### 5.6 Scale-relative clustering (Phase 3 item 3) and performance (item 6)
+
+**Resolved.** `cluster_strokes` (`rune_diagram/geometry.rs`) no longer uses
+one pair of fixed absolute distance thresholds for every stroke pair in the
+drawing. Two *different* factor sets are used, chosen per pair, because a
+single linear "threshold scales with size" rule cannot satisfy both shapes
+below at once (this took several failed single-formula attempts against the
+existing test suite to establish — see the git history on this file's
+Phase 3 pass for the specific counter-examples):
+
+- **Open pair** (neither stroke closed): threshold scales off the **larger**
+  of the two strokes' bounding-box diagonals. A multi-stroke rune's open
+  component strokes are often quite different sizes and don't literally
+  touch (an arrow's short chevron head next to its long shaft) — bridging
+  that gap needs a reach generous enough for the larger part.
+- **Closed-involved pair** (either stroke closed, e.g. a circle rune like
+  `sphere`): threshold scales off the **smaller** diagonal, using tighter
+  factors. A closed shape already reads as a complete glyph on its own, so
+  its reach must stay conservative or it swallows unrelated ink drawn
+  nearby — a big circle's own bounding diagonal is not a sensible "how far
+  can I reach for a neighbor" radius.
+- **Override back to the open/generous path**, even when a stroke is
+  closed, if the pair is **nested** (one bounding box mostly contains the
+  other — `aura`'s hexagon ring around its own crossbar, `fire`'s loop
+  around its own inner squiggle) **or** their bounding boxes actually touch
+  (gap ≤ 0.004 — `continuous`'s two diamonds, which share a drawn vertex).
+  Both are still one multi-stroke rune, not a closed glyph with a
+  coincidentally-adjacent neighbor.
+
+A spatial hash grid replaces the old O(n²) all-pairs scan once a scope has
+≥24 ink strokes: items are bucketed by bounds-center into cells sized to
+the largest plausible per-pair threshold (`max_diagonal ×
+OPEN_CENTER_DISTANCE_FACTOR`, an upper bound on both factor sets), so only
+same/adjacent-cell pairs are ever compared — the standard uniform-grid
+neighbor-search correctness invariant. A cheap bounding-box-gap check (a
+valid lower bound on true stroke distance) skips the O(p²)
+segment-to-segment scan whenever the boxes alone are already too far apart.
+`recognize_rune` also skips a template variant outright if its stroke count
+differs from the drawn stroke count by more than 2, before paying for
+normalization and full scoring.
+
+`hundred_plus_symbol_diagram_round_trips_within_perf_budget_and_order_independence`
+(§7) is the exit-criterion test: ~120 small `spark` runes packed on a grid
+inside the working circle all round-trip, well inside a generous sanity
+time budget (a debug `cargo test` bound, not the plan doc's native-release
+~100ms target — that would need a `--release` benchmark, not attempted
+here), and reversing the draw order doesn't change how many are found.
+
+**Explicitly deferred, not attempted this pass:** cross-edit caching keyed
+on a canonical-stroke hash with dirty-region re-interpretation. That needs
+a persistent cache plumbed through `state.rs`/`game.rs`'s call sites, not
+just the recognizer — a separate change once this pass's algorithmic
+complexity work is validated in play.
+
+### 5.7 What circle grammar does *not* yet have
+
 - **Compositional semantics.** There's no spell grammar today — a named
   spell is a stat-blob-plus-lookup, not a data-defined predicate over
-  effects/shape/trigger/structure. Phase 4 scope.
+  effects/shape/trigger/structure. §5.5's nested scopes are the structural
+  unlock this needs, but sub-scopes still aren't named grammar nodes (e.g.
+  "volcano requires 2 sub-scopes of `force`") — Phase 4 scope.
 - **The *full* containment budget rule.** §5.4 now has a first-cut version
   (total potency vs. a capacity from circle quality + containment). Phase
   4's job is to replace the rough baseline/coefficients with a properly
   balanced version, likely tied into the spell-grammar's structure
   requirements rather than a flat additive formula.
+- **A full beam-search recovery segmentation.** `best_recovery_window`
+  (`rune_diagram/recognition.rs`, a band-aid over clustering failures,
+  A5) still enumerates contiguous windows rather than a true beam search
+  over spatial subsets — Phase 3 item 5 made it order-independent (windows
+  over a nearest-neighbor spatial visiting order, not original draw order)
+  but did not replace the windowing approach itself. `remaining_stroke_groups`
+  (used by the sphere-extraction band-aid) *was* fully replaced — it now
+  reuses `cluster_strokes`' ordinary spatial clustering instead of an
+  index-adjacency heuristic.
 
 ---
 
@@ -521,10 +659,22 @@ alongside it.
 | `MIN_DIAGRAM_RUNE_CONFIDENCE` | 0.32 | `rune_diagram.rs` | §5.1 per-rune floor |
 | `MIN_RECOVERED_RUNE_CONFIDENCE` | 0.52 | `rune_diagram/recognition.rs` | recovered-cluster floor (contamination band-aid, A5) |
 | `is_inside_working_circle` bounds | `nx²+ny² ≤ 1.25` (ellipse) and `< 0.92×` circle dims (bbox) | `rune_diagram/circle.rs` | §5.1 |
-| `MIN_RUNE_SCALE_IN_CIRCLE` | 0.12 | `rune_diagram/recognition.rs` | §5.2 |
-| `MAX_CLUSTER_STROKE_DISTANCE` | 0.045 | `rune_diagram/geometry.rs` | §5.2 clustering (absolute, not scale-relative — C3) |
-| `MAX_CLUSTER_CENTER_DISTANCE` | 0.09 | `rune_diagram/geometry.rs` | §5.2 clustering |
+| `MAX_CIRCLE_CHAIN_STROKES` | 4 | `rune_diagram/circle.rs` | §5.1 multi-stroke circle assembly cap |
+| `MIN_ARC_SPAN` | 0.08 | `rune_diagram/circle.rs` | §5.1 minimum span to be considered a circle-arc candidate |
+| chain gap limit | `(chain_span × 0.12).max(0.02)` | `rune_diagram/circle.rs` | §5.1 endpoint-touch tolerance when chaining arcs |
+| `MIN_RUNE_CLUSTER_POINTS` | 4 | `rune_diagram/recognition.rs` | §5.2 rune legibility floor (replaces `MIN_RUNE_SCALE_IN_CIRCLE`, C1/C2) |
+| structure-mark `directness` gate | `> 0.65`, ≤3 points | `magical_circle.rs` | §5.2 `PerimeterMark`/`ScriptMark` (C1/C2) |
 | structure-mark population thresholds | satellites ≥3 @ q>0.68, rings ≥2 @ q>0.48, scripts ≥8 @ q>0.42, radials ≥6 @ q>0.68 | `rune_diagram.rs` | §5.2 |
+| `OPEN_CENTER_DISTANCE_FACTOR` / `OPEN_STROKE_DISTANCE_FACTOR` | 0.65 / 0.35 (× larger of pair's diagonals) | `rune_diagram/geometry.rs` | §5.6 clustering, open-pair reach (C3) |
+| `CLOSED_CENTER_DISTANCE_FACTOR` / `CLOSED_STROKE_DISTANCE_FACTOR` | 0.42 / 0.21 (× smaller of pair's diagonals) | `rune_diagram/geometry.rs` | §5.6 clustering, closed-involved-pair reach (C3) |
+| `MIN_CLUSTER_CENTER_DISTANCE` / `MIN_CLUSTER_STROKE_DISTANCE` | 0.018 / 0.009 | `rune_diagram/geometry.rs` | §5.6 clustering floors |
+| nested/touching-bbox override | full containment (8% tolerance) or bbox gap ≤ 0.004 | `rune_diagram/geometry.rs` | §5.6 closed-pair override back to the open/generous factors |
+| clustering grid activation / cell size | ≥24 ink strokes; cell = `max_diagonal × OPEN_CENTER_DISTANCE_FACTOR` (floor 0.03) | `rune_diagram/geometry.rs` | §5.6 spatial grid (C4) |
+| template-variant stroke-count prefilter | skip variant if `\|variant_strokes − drawn_strokes\| > 2` | `rune_drawing.rs` | §5.6 perf (item 6) |
+| `MAX_SCOPE_DEPTH` | 3 | `rune_diagram/scope.rs` | §5.5 nested-scope recursion cap |
+| nested-ring scale band | `0.28..=0.90` relative to parent scope | `rune_diagram/scope.rs` | §5.5 |
+| `NESTED_RING_MIN_ORBIT` | 0.20 | `rune_diagram/scope.rs` | §5.5 excludes concentric reinforcement-ring stacks |
+| `MIN_NESTED_RING_QUALITY` | 0.40 (via `ring_shape_score`) | `rune_diagram/scope.rs` | §5.5 |
 | complexity/intensity/containment targets | rings 3, satellites 5, radials 4, perimeter 14, scripts 28, runes 6 | `magical_circle.rs` | §5.3 |
 | tier thresholds | tier4: complexity≥0.72 + tier≥4 rune + ≥2 rings + ≥3 satellites + ≥6 perimeter; tier3: complexity≥0.61 or tier≥4 rune; tier2: complexity≥0.48 | `magical_circle.rs` | §5.3 |
 | `RuneCategory::ideal_scale_in_circle` | Effect 0.18, Shape 0.15, Trigger 0.14, Modifier 0.12 | `data.rs` | §4.1 potency's size reference, also `size_harmony` |
@@ -568,9 +718,19 @@ alongside it.
 - **`src/rune_diagram/tests.rs`** — `doubling_effect_rune_scale_raises_potency`
   and `under_drawn_stroke_reads_but_reports_lower_potency` are Phase 2's
   exit criteria as tests; `rune_quality_does_not_depend_on_board_position`
-  guards D1.
+  guards D1. Phase 3: `nested_off_center_ring_reads_its_own_effect_rune_relative_to_its_own_scope`
+  (§5.5), `rune_far_below_old_twelve_percent_scale_floor_still_reads` (§5.2,
+  C1/C2), and `hundred_plus_symbol_diagram_round_trips_within_perf_budget_and_order_independence`
+  (§5.6, the combined scale/perf/order-independence exit criterion) are the
+  new Phase 3 exit criteria as tests. The pre-existing
+  `damaged_sphere_fragment_stays_out_of_neighboring_light_cluster`,
+  `interprets_high_tier_structured_circle_spell`, and the full
+  `structural_rune_sample_set_reads_inside_full_diagrams` sweep were the
+  regression wall the §5.6 clustering-factor retune was validated against.
 - **`src/state/tests.rs`** — `doubling_effect_rune_size_raises_power_in_report`
-  is the exit criterion at the `evaluate()` level (not just `InterpretedRune`).
+  is the exit criterion at the `evaluate()` level (not just `InterpretedRune`);
+  `high_tier_circle_strengthens_city_shield_commission` guards the
+  concentric-ring-stack idiom against being misread as nested scopes (§5.5).
 
 Any change to a constant in §6 should keep all of the above green, or the
 affected sentence in this document (and, if it's a tracked confusion, the
@@ -578,8 +738,14 @@ affected sentence in this document (and, if it's a tracked confusion, the
 
 ---
 
-*Last updated: 2026-07-03 — Phase 0, Phase 1, and Phase 2 of `.project/magic-symbol-system-plan.md`.
+*Last updated: 2026-07-03 — Phase 0 through Phase 3 of
+`.project/magic-symbol-system-plan.md`.
 Phase 1 remaining: generalize the structural-check layer (§2.3) into
 data-driven rules. Phase 2 remaining: none of the plan's four items are
 outstanding, but the containment budget (§5.4) is explicitly a rough first
-cut for Phase 4 to properly balance, not a tuned final version.*
+cut for Phase 4 to properly balance, not a tuned final version. Phase 3
+remaining (all documented as deferred where they occur, §5.5-§5.7): the
+full compositional grammar and full containment budget are Phase 4 scope
+by the plan's own split; `best_recovery_window` is order-independent but
+still windows rather than running a true beam search; cross-edit
+recognition caching was not attempted.*

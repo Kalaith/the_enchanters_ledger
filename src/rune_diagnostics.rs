@@ -3,9 +3,9 @@
 use crate::data::{GameData, RuneDef};
 use crate::magical_circle::{classify_circle_stroke, CircleBounds};
 use crate::rune_diagram::{
-    circle_quality, cluster_strokes, interpret_diagram, is_circle_structure,
-    is_inside_working_circle, select_working_circle_for_strokes, StrokeBounds, MIN_CIRCLE_QUALITY,
-    MIN_DIAGRAM_RUNE_CONFIDENCE,
+    cluster_strokes, gather_circle_candidates, interpret_diagram, is_circle_structure,
+    is_inside_working_circle, select_working_circle_for_strokes, StrokeBounds,
+    MIN_CIRCLE_QUALITY, MIN_DIAGRAM_RUNE_CONFIDENCE,
 };
 use crate::rune_drawing::{recognize_rune, DrawnStroke};
 use crate::state::GameSession;
@@ -83,25 +83,19 @@ pub fn diagnose_diagram<'a>(
     )
     .ok();
 
-    let circle_candidates = useful
-        .iter()
-        .filter_map(|(index, stroke)| {
-            let bounds = StrokeBounds::from_stroke(stroke)?;
-            circle_quality(stroke, bounds).map(|score| (*index, score, bounds))
-        })
-        .collect::<Vec<_>>();
+    let circle_candidates = gather_circle_candidates(&useful);
     writeln!(log, "\ncircle candidates: {}", circle_candidates.len()).ok();
-    for (index, score, bounds) in &circle_candidates {
+    for (indices, score, bounds) in &circle_candidates {
         writeln!(
             log,
-            "  stroke #{index}: circle={} bounds={}",
+            "  strokes {indices:?}: circle={} bounds={}",
             pct(*score),
             fmt_bounds(*bounds)
         )
         .ok();
     }
 
-    let Some((circle_index, circle_score, circle_bounds)) =
+    let Some((circle_member_indices, circle_score, circle_bounds)) =
         select_working_circle_for_strokes(&circle_candidates, &useful)
     else {
         writeln!(log, "\nselected circle: none").ok();
@@ -112,7 +106,7 @@ pub fn diagnose_diagram<'a>(
 
     writeln!(
         log,
-        "\nselected circle: stroke #{circle_index} quality={} bounds={}",
+        "\nselected circle: strokes {circle_member_indices:?} quality={} bounds={}",
         pct(circle_score),
         fmt_bounds(circle_bounds)
     )
@@ -126,14 +120,14 @@ pub fn diagnose_diagram<'a>(
     );
     let classified_marks = useful
         .iter()
-        .filter(|(index, _)| *index != circle_index)
+        .filter(|(index, _)| !circle_member_indices.contains(index))
         .filter_map(|(index, stroke)| {
             classify_circle_stroke(stroke, spell_bounds).map(|mark| (*index, mark))
         })
         .collect::<Vec<_>>();
     writeln!(log, "\ninner stroke filtering:").ok();
     for (index, stroke) in &useful {
-        if *index == circle_index {
+        if circle_member_indices.contains(index) {
             continue;
         }
         let inside = is_inside_working_circle(stroke, circle_bounds);
@@ -162,7 +156,7 @@ pub fn diagnose_diagram<'a>(
     let inner_strokes = useful
         .iter()
         .filter(|(index, stroke)| {
-            *index != circle_index
+            !circle_member_indices.contains(index)
                 && is_inside_working_circle(stroke, circle_bounds)
                 && !is_circle_structure(*index, &classified_marks)
         })
