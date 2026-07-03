@@ -382,6 +382,17 @@ impl Game {
                 };
                 self.notifications.info(mode);
             }
+            UiAction::ToggleSandboxMode => {
+                let enabled = !self.session.sandbox_mode;
+                self.session.set_sandbox_mode(enabled);
+                self.hide_interpretation_feedback();
+                let mode = if enabled {
+                    "Sandbox: free experimentation, lenient acceptance, no delivery reward."
+                } else {
+                    "Back to commissioned work."
+                };
+                self.notifications.info(mode);
+            }
             UiAction::StartRuneStroke(point) => {
                 self.hide_interpretation_feedback();
                 self.session.start_drawing_stroke(point);
@@ -484,7 +495,7 @@ impl Game {
     }
 
     fn score_practice(&mut self) {
-        let Some(rune_id) = self.session.board.selected_rune.as_deref() else {
+        let Some(rune_id) = self.session.board.selected_rune.clone() else {
             self.notifications
                 .warning("Select a rune in the guide before practicing.");
             return;
@@ -503,12 +514,16 @@ impl Game {
             .runes
             .iter()
             .filter(|rune| self.session.can_use_rune(rune));
-        let Some(report) = practice_report_for_rune(rune_id, &self.practice.strokes, runes) else {
+        let Some(report) = practice_report_for_rune(&rune_id, &self.practice.strokes, runes)
+        else {
             self.notifications
                 .warning("The practice mark is too faint to score.");
             return;
         };
         let quality = report.quality;
+        if report.accepted {
+            self.session.record_rune_mastery(&rune_id, quality);
+        }
         self.practice.report = Some(report);
         if quality >= 0.78 {
             self.notifications

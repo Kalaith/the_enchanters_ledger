@@ -252,12 +252,12 @@ pub fn analyze_magical_circle(
     } else {
         runes.iter().map(|rune| rune.quality).sum::<f32>() / runes.len() as f32
     };
-    let ring_score = ratio_count(ring_count, 3);
-    let satellite_score = ratio_count(satellite_count, 5);
-    let radial_score = ratio_count(radial_count, 4);
-    let perimeter_score = ratio_count(perimeter_mark_count, 14);
-    let script_score = ratio_count(script_mark_count, 28);
-    let rune_count_score = ratio_count(runes.len(), 6);
+    let ring_score = diminishing_count(ring_count, 3);
+    let satellite_score = diminishing_count(satellite_count, 5);
+    let radial_score = diminishing_count(radial_count, 4);
+    let perimeter_score = diminishing_count(perimeter_mark_count, 14);
+    let script_score = diminishing_count(script_mark_count, 28);
+    let rune_count_score = diminishing_count(runes.len(), 6);
     let tier_score = (max_tier as f32 / 4.0).clamp(0.25, 1.0);
     let structural_quality = structural_quality(marks);
     let satellite_placement = satellite_placement(marks);
@@ -320,7 +320,7 @@ pub fn analyze_magical_circle(
     };
 
     let dominant_effect = dominant_effect(runes, rune_defs);
-    let name = spell_name(dominant_effect.as_deref(), tier_rank, runes, rune_defs);
+    let name = spell_name(dominant_effect.as_deref(), tier_rank, rune_defs);
     let high_tier = if tier_rank >= 4 { 1 } else { 0 };
     let score_bonus =
         (complexity * 28.0 + symmetry * 8.0 + (tier_rank.saturating_sub(1) * 4) as f32).round()
@@ -371,8 +371,18 @@ fn count_kind(marks: &[CircleMark], kind: CircleStrokeKind) -> usize {
     marks.iter().filter(|mark| mark.kind == kind).count()
 }
 
-fn ratio_count(count: usize, target: usize) -> f32 {
-    (count as f32 / target.max(1) as f32).clamp(0.0, 1.0)
+/// Structural-count score with diminishing but never-capped returns (plan Phase 4 item 1 / C6) —
+/// replaces the old `ratio_count(count, target) = (count/target).clamp(0,1)`, which saturated at
+/// 1.0 exactly at `target` and contributed nothing beyond it, so a 100-symbol diagram could never
+/// out-score a well-drawn 30-symbol one no matter how much more structure it carried. This curve
+/// approaches 1.0 asymptotically without ever reaching it: `count / (count + target * 0.4)` is
+/// ~0.71 at `count == target` (close to the old curve's saturated 1.0, to limit how much tier
+/// thresholds tuned against the old curve need retuning) and keeps climbing, sub-linearly, past
+/// it — `0.83` at `2*target`, `0.88` at `3*target`, and so on.
+pub(crate) fn diminishing_count(count: usize, target: usize) -> f32 {
+    let count = count as f32;
+    let target = (target.max(1) as f32) * 0.4;
+    count / (count + target)
 }
 
 fn structural_quality(marks: &[CircleMark]) -> f32 {
@@ -434,7 +444,7 @@ fn circular_symmetry(marks: &[CircleMark], runes: &[InterpretedRune]) -> f32 {
         (x + angle.cos(), y + angle.sin())
     });
     let balance = 1.0 - (x * x + y * y).sqrt() / anchors.len() as f32;
-    let count_score = ratio_count(anchors.len(), 8);
+    let count_score = diminishing_count(anchors.len(), 8);
     (balance * 0.72 + count_score * 0.28).clamp(0.0, 1.0)
 }
 
@@ -496,13 +506,12 @@ fn dominant_effect_scale(runes: &[InterpretedRune], rune_defs: &[&RuneDef]) -> f
         .clamp(0.0, 0.35)
 }
 
-fn spell_name(
-    dominant_effect: Option<&str>,
-    tier_rank: u32,
-    runes: &[InterpretedRune],
-    rune_defs: &[&RuneDef],
-) -> String {
-    let has = |id: &str| runes.iter().any(|rune| rune.rune_id == id);
+/// Generic, un-named fallback title — every *named* spell (the old hardcoded "Aegis of the
+/// Floating City" / "Gravity Well" / etc. arms) is now a data-defined recipe instead
+/// (`assets/data/recipes.json`, matched by `crate::recipes::match_recipe` in `evaluate()`, which
+/// takes priority over this when a recipe matches). This is what's left for any diagram that
+/// doesn't match a named recipe — plan Phase 4 item 3's "no code special-case" goal.
+fn spell_name(dominant_effect: Option<&str>, tier_rank: u32, rune_defs: &[&RuneDef]) -> String {
     let prefix = match tier_rank {
         4.. => "Grand",
         3 => "High",
@@ -510,13 +519,6 @@ fn spell_name(
         _ => "Simple",
     };
     match dominant_effect {
-        Some("gravity") if has("sphere") && has("continuous") => {
-            format!("{prefix} Aegis of the Floating City")
-        }
-        Some("gravity") => format!("{prefix} Gravity Well"),
-        Some("teleportation") => format!("{prefix} Wayfold Gate"),
-        Some("summoning") => format!("{prefix} Threshold Calling"),
-        Some("time") => format!("{prefix} Chronal Ledger"),
         Some(effect) => {
             let name = rune_def(rune_defs, effect)
                 .map(|rune| rune.name.as_str())

@@ -11,7 +11,8 @@
 > `src/rune_drawing/property_tests.rs`, or `tests/corpus/`.
 >
 > Written as Phase 0 of `.project/magic-symbol-system-plan.md`, updated
-> through Phase 3. It documents the system **as it exists today**: Hungarian
+> through Phase 5 (the plan's final phase). It documents the system **as it
+> exists today**: Hungarian
 > stroke assignment, open-stroke corner fix, eraser-fragment merge,
 > strict/identity variant parity, deterministic tie-breaks, mismatch-segment
 > alignment (D3), a continuous (not stepped) ambiguity penalty and corner
@@ -21,12 +22,17 @@
 > (layout-position bias deleted, circle quality now additive not stacked),
 > multi-stroke circle assembly, a recursive containment hierarchy for nested
 > scopes, scale-relative (not absolute) clustering with a spatial grid,
-> geometry-driven (not size-driven) structure-vs-rune classification, and
-> pure spatial (not draw-order) stroke grouping (§5).
-> It is not a design proposal — proposals live in the plan document's
-> Phase 4–5 sections (Phase 1's
+> geometry-driven (not size-driven) structure-vs-rune classification, pure
+> spatial (not draw-order) stroke grouping (§5), a compositional spell tree
+> with named spells as data-defined recipes (`assets/data/recipes.json`),
+> diminishing-returns structural scoring, a recursive per-scope containment
+> budget, cause-specific backfire messaging (§8), and — as of Phase 5 —
+> per-context acceptance bands (Practice/Commission/Sandbox), a rune-mastery
+> history that fades guide aids over time, specific player-facing rejection
+> hints, and story-pacing verification (§9).
+> It is not a design proposal — Phase 1's
 > generic/data-driven *structural checks* — as opposed to template shapes,
-> which are already data-driven — remain future work; see §2.3). This doc
+> which are already data-driven — remain future work; see §2.3. This doc
 > is also the intended source for in-game journal/tutorial copy once
 > that's written.
 
@@ -41,11 +47,13 @@ The drawing has to be readable by a recognizer with no hand-authored
 per-drawing hints, robust to ordinary hand-drawing noise, and — eventually —
 scale from a 3-symbol fireball to a 100+-symbol grand diagram (see the plan
 document's goal statement). Single-symbol recognition (§2–3), the magnitude
-channel (§4), and — as of Phase 3 — scaling a structured circle to hundreds
-of small symbols (§5) are all in place. What's still missing is a real
-compositional *grammar* (a spell as a data-defined predicate over the
-diagram, not a stat-blob-plus-lookup) and a properly balanced containment
-budget — both tracked as Phase 4, not here (§5.5).
+channel (§4), scaling a structured circle to hundreds of small symbols
+(§5), a compositional grammar (named spells as data-defined predicates over
+the diagram, §8), and — as of Phase 5 — progression and aids for story mode
+(per-context acceptance bands, a fading mastery/guide system, player-facing
+failure hints, and story-pacing verification, §9) are all in place. What's
+left is a fully-balanced containment budget (still a documented first cut,
+§8.3) and the deferred items each phase above already calls out explicitly.
 
 ### 1.2 Vocabulary
 
@@ -435,13 +443,13 @@ rune quality, and the structure-count ratios below), plus the raw counts,
 then looks up a spell name/tier keyed on the dominant effect rune (highest
 tier × quality × scale among Effect-category runes) plus these counts.
 
-Complexity, containment, and intensity are each measured against **fixed
-targets** (`ratio_count`): rings/**3**, satellites/**5**, radials/**4**,
-perimeter marks/**14**, script marks/**28**, rune count/**6** — once a
-diagram exceeds a target, additional work on that axis contributes nothing
-further (C6). This is why a 100-symbol diagram cannot currently out-score a
-well-drawn 30-symbol one; Phase 4's diminishing-returns amplifier model
-replaces this fixed-target cap.
+**Resolved as of Phase 4 (C6).** Complexity, containment, and intensity are
+each measured against targets (rings/**3**, satellites/**5**, radials/**4**,
+perimeter marks/**14**, script marks/**28**, rune count/**6**) via
+`diminishing_count`, not the old `ratio_count`: uncapped and monotonic
+instead of saturating at 1.0 exactly at the target and contributing nothing
+beyond it. A 100-symbol diagram now always out-scores a well-drawn
+30-symbol one, sub-linearly. See §8.2 for the exact formula.
 
 Tier is thresholded on complexity and structure counts (`magical_circle.rs`):
 tier 4 ("grand") needs a tier-≥4 rune present, complexity ≥0.72, ≥2 rings,
@@ -610,16 +618,18 @@ complexity work is validated in play.
 
 ### 5.7 What circle grammar does *not* yet have
 
-- **Compositional semantics.** There's no spell grammar today — a named
-  spell is a stat-blob-plus-lookup, not a data-defined predicate over
-  effects/shape/trigger/structure. §5.5's nested scopes are the structural
-  unlock this needs, but sub-scopes still aren't named grammar nodes (e.g.
-  "volcano requires 2 sub-scopes of `force`") — Phase 4 scope.
-- **The *full* containment budget rule.** §5.4 now has a first-cut version
-  (total potency vs. a capacity from circle quality + containment). Phase
-  4's job is to replace the rough baseline/coefficients with a properly
-  balanced version, likely tied into the spell-grammar's structure
-  requirements rather than a flat additive formula.
+- **Compositional semantics — resolved as of Phase 4, first cut.** Named
+  spells are now data-defined predicates over a `ScopeSpell` tree
+  (`assets/data/recipes.json`, §8), not a stat-blob-plus-lookup — see §8 for
+  the schema and matching algorithm. Still not attempted: recipe
+  *discovery/editing* UI beyond the existing ledger/journal (Phase 5
+  scope), and backfire rules only cover three causes (§8.5), not every way
+  a diagram's grammar can be broken.
+- **The *full* containment budget rule — resolved as of Phase 4, first
+  cut.** §8.3 replaces the flat single-scope formula with a recursive
+  per-scope walk. Still deliberately rough: coefficients are a starting
+  point, not a balanced-through-playtesting version, same caveat as Phase
+  2's original cut.
 - **A full beam-search recovery segmentation.** `best_recovery_window`
   (`rune_diagram/recognition.rs`, a band-aid over clustering failures,
   A5) still enumerates contiguous windows rather than a true beam search
@@ -675,7 +685,8 @@ alongside it.
 | nested-ring scale band | `0.28..=0.90` relative to parent scope | `rune_diagram/scope.rs` | §5.5 |
 | `NESTED_RING_MIN_ORBIT` | 0.20 | `rune_diagram/scope.rs` | §5.5 excludes concentric reinforcement-ring stacks |
 | `MIN_NESTED_RING_QUALITY` | 0.40 (via `ring_shape_score`) | `rune_diagram/scope.rs` | §5.5 |
-| complexity/intensity/containment targets | rings 3, satellites 5, radials 4, perimeter 14, scripts 28, runes 6 | `magical_circle.rs` | §5.3 |
+| complexity/intensity/containment targets | rings 3, satellites 5, radials 4, perimeter 14, scripts 28, runes 6 (now via `diminishing_count`, uncapped — C6) | `magical_circle.rs` | §5.3, §8.2 |
+| `diminishing_count` shape constant | `count / (count + target × 0.4)` | `magical_circle.rs` | §8.2 |
 | tier thresholds | tier4: complexity≥0.72 + tier≥4 rune + ≥2 rings + ≥3 satellites + ≥6 perimeter; tier3: complexity≥0.61 or tier≥4 rune; tier2: complexity≥0.48 | `magical_circle.rs` | §5.3 |
 | `RuneCategory::ideal_scale_in_circle` | Effect 0.18, Shape 0.15, Trigger 0.14, Modifier 0.12 | `data.rs` | §4.1 potency's size reference, also `size_harmony` |
 | potency scale curve | (0.5× ratio → 0.6), (1.0× → 1.0), (2.0× → 1.6), slopes continue past anchors | `rune_diagram/recognition.rs` | §4.2 |
@@ -683,9 +694,19 @@ alongside it.
 | potency final clamp | `[0.35, 2.2]` | `rune_diagram/recognition.rs` | §4.2 |
 | circle-quality score contribution | `(circle_quality - 0.55) × {20 stability, 14 safety, 10 score}`, additive once per evaluation | `state/evaluate.rs` | §5.4 (D2) |
 | power/mana potency scaling | `power × potency`, `mana_cost's base × potency` (on top of quality's own effect) | `state/evaluate.rs` | §5.4 |
-| containment budget | `capacity = 2.0 + circle_quality×6.0 + containment×4.0`; excess potency costs `×10.0` stability | `state/evaluate.rs` | §5.4 (rough first cut) |
+| containment budget v2 | root: `2.0 + circle_quality×6.0 + containment×4.0`; each sub-scope: `1.0 + containment×3.0`; excess at every scope costs `×10.0` stability, summed | `state/evaluate.rs` | §8.3 (rough first cut, replaces the Phase 2 flat version) |
+| `SAFER_CONTAINMENT_BONUS` | 1.5, added to a scope's own `containment` if it has a `safer` modifier | `rune_diagram/scope.rs` | §8.3 |
+| scope containment formula | `diminishing_count(rings, 2)×0.6 + diminishing_count(perimeter, 8)×0.4`, clamped 0..1, plus the safer bonus | `rune_diagram/scope.rs` | §8.1, §8.3 |
 | `evaluate()` score cap | `68 + avg_quality × 52` | `state/evaluate.rs` | §5.4 |
 | grade thresholds | Unstable: stability<42 or safety<32 or score<64; Brilliant: score≥92 and stability≥68 and safety≥48 | `state/evaluate.rs` | §5.4 |
+| `MIN_EFFECT_PRESENCE` | 0.001 | `recipes.rs` | §8.4 recipe effect-presence floor |
+| recipe tie-break | highest `tier` wins, then lowest `id` | `recipes.rs` | §8.4 |
+| backfire potency-excess threshold | `total_excess > 0.5` | `state/text.rs` | §8.5 |
+| acceptance bands (confidence / margin / ambiguous-confidence) | Practice 0.40/0.05/0.64; Commission 0.32/0.04/0.58 (== §2.4's unqualified constants); Sandbox 0.24/0.03/0.50 | `rune_drawing.rs` | §9.1 |
+| diagram acceptance bands (circle / diagram-rune) | Practice 0.40/0.40; Commission 0.32/0.32 (== §5.1/§6's `MIN_CIRCLE_QUALITY`/`MIN_DIAGRAM_RUNE_CONFIDENCE`); Sandbox 0.24/0.24 | `rune_diagram.rs` | §9.1 |
+| `RuneMastery::score` | `accepted_count × (quality_sum / accepted_count)` | `state.rs` | §9.2 |
+| guide opacity fade | `GUIDE_BASE_ALPHA (0.32) / (1.0 + mastery_score / GUIDE_FADE_SCALE (6.0))` | `ui/drawing.rs` | §9.2 |
+| `GUIDE_FREE_INSIGHT` | 1 | `state/work.rs` | §9.2 |
 
 ---
 
@@ -731,6 +752,53 @@ alongside it.
   is the exit criterion at the `evaluate()` level (not just `InterpretedRune`);
   `high_tier_circle_strengthens_city_shield_commission` guards the
   concentric-ring-stack idiom against being misread as nested scopes (§5.5).
+  Phase 4: the same test doubles as the `floating_city` recipe's full-pipeline
+  regression guard (§8.4) — its title assertion now passes through
+  `crate::recipes::match_recipe`, not a hardcoded `match` arm.
+  `diminishing_returns_let_more_structure_always_score_higher` is §8.2's exit
+  criterion (more structure past the old fixed targets must score higher, not
+  the same); `backfire_message_names_uncontained_potency` is §8.5's.
+- **`src/recipes.rs` unit tests** — the authoritative correctness suite for
+  `match_recipe` itself, run against hand-built `ScopeSpell` trees rather
+  than drawn diagrams (recognizer accuracy is a separate, already-covered
+  concern): bare-presence vs. `min_potency` requirements, potency summing
+  across sub-scopes, tier/id tie-break determinism, and a full
+  structure-plus-sub-scope-count gate modeled on `volcano`.
+- **`src/rune_diagram/tests.rs`** — `fireball_recipe_recognized_purely_from_data`
+  and `volcano_recipe_recognized_purely_from_data` are Phase 4's own exit
+  criteria as tests: both diagrams are matched against
+  `assets/data/recipes.json` with no rune-id-specific Rust in the naming
+  path. `volcano_recipe_recognized_purely_from_data` also exercises
+  `ScopeSpell::total_potency` summing fire potency across the root scope and
+  both vent sub-scopes to clear `volcano`'s `min_potency` requirement.
+
+  `simple_named_recipe_still_recognized_through_evaluate` is the matching
+  regression guard for the other four migrated recipes (`gravity_well` via
+  the `floating_stage` commission, which requires `gravity` directly) —
+  note it sets `workshop_rank = 4`, since `gravity` is tier 4 and
+  `GameSession::can_use_rune` (`state.rs`) excludes any rune above the
+  session's own workshop rank from the recognizer's candidate set entirely;
+  forgetting this makes an unlocked, perfectly-drawn tier-4 rune legitimately
+  read as its best-scoring *unlocked* alternative instead — worth checking
+  before suspecting a recognizer or board-placement bug in a session-level
+  (as opposed to `interpret_diagram()`-level) mismatch.
+- **Phase 5.** `rune_drawing::tests::acceptance_bands_are_ordered_practice_strictest_sandbox_most_lenient`
+  and `context_changes_acceptance_cutoffs_never_the_underlying_score` are
+  §9.1's exit criteria — the three bands order correctly and the underlying
+  recognition score never changes with context, only the cutoff applied to
+  it. `state::tests::sandbox_mode_accepts_a_weak_circle_commission_mode_rejects`
+  is the same guarantee one level up, through `GameSession::interpret_drawing`.
+  `state::tests::accepted_reads_accumulate_rune_mastery` and
+  `guide_free_interpretation_earns_insight_bonus_but_guided_does_not` guard
+  §9.2. `rune_diagnostics::tests::player_hint_flags_missing_circle`,
+  `player_hint_flags_a_weak_circle`, and `player_hint_is_none_for_a_clean_diagram`
+  guard §9.3's priority order at the function level;
+  `state::tests::circle_free_diagram_rejection_surfaces_the_specific_player_hint`
+  guards the same wiring through `interpret_drawing`.
+  `state::tests::early_commissions_still_clear_acceptance_when_drawn_with_a_degraded_hand`
+  and the pre-existing `high_tier_circle_strengthens_city_shield_commission`
+  are §9.4's pacing exit criteria (early commissions tolerate a jittered
+  hand; a late commission drawn with real structure reaches `Brilliant`).
 
 Any change to a constant in §6 should keep all of the above green, or the
 affected sentence in this document (and, if it's a tracked confusion, the
@@ -738,14 +806,316 @@ affected sentence in this document (and, if it's a tracked confusion, the
 
 ---
 
-*Last updated: 2026-07-03 — Phase 0 through Phase 3 of
-`.project/magic-symbol-system-plan.md`.
+## 8. Compositional spell grammar (Phase 4)
+
+Phase 4 replaces the stat-blob-plus-lookup spell system with named spells
+defined as data predicates over the diagram — the plan's own worked example
+(`volcano`, a fire effect spread across several vents inside a structured
+crater) is close to literally what ships in `assets/data/recipes.json`.
+
+### 8.1 The spell tree
+
+`ScopeSpell` (`src/rune_diagram.rs`) is the tree `interpret_scope`
+(§5.5/§5.6) was already recursively walking, finally *kept* instead of
+flattened away. `ScopeOutcome` (`rune_diagram/scope.rs`) now carries
+`own_runes` (this level only) and `sub_scopes: Vec<ScopeOutcome>`
+(previously `.extend()`-ed into the parent's flat list and lost) — two
+small recursive walks turn one `ScopeOutcome` tree into the two shapes
+different callers need:
+
+- `flatten_runes` reproduces the exact Phase 0-3 flat `Vec<InterpretedRune>`
+  — every existing consumer (UI, `evaluate()`'s per-rune stat math, the
+  `MagicalCircleSpell` bonus struct) is unaffected by Phase 4.
+- `build_scope_spell` groups each level's own runes by category
+  (`effects: Vec<(rune_id, potency)>`, `shape`, `trigger`, `modifiers`) and
+  recurses into `sub_scopes: Vec<ScopeSpell>` — this is what
+  `crate::recipes::match_recipe` (§8.4) evaluates predicates against.
+
+`DiagramInterpretation.scope_spell: Option<ScopeSpell>` is populated
+whenever a circle is found — **deliberately not** gated behind
+`analyze_magical_circle`'s own "elaborate enough" check (`structural_count
+< 2 && max_tier < 4` → `None`). That gate exists for the ring/satellite
+*bonus* struct's own purpose; a small, low-structure diagram (a fireball is
+the plan's own "3-4 symbols" example) still needs a scope tree to be
+matchable against recipes. Tying the two together was an early bug in this
+pass — `fireball_recipe_recognized_purely_from_data` (§7) is the regression
+guard.
+
+`ScopeSpell::total_potency(effect_id)` sums that effect's potency across a
+scope *and every descendant sub-scope* — the mechanism behind the plan's
+"repeated effect runes / sub-scopes feeding a parent ... multiply potency":
+a recipe's `min_potency` is checked against this sum, not any single rune's
+own potency (§8.4).
+
+### 8.2 Diminishing-returns amplifiers (C6)
+
+`magical_circle::diminishing_count(count, target)` replaces `ratio_count`
+at every structural-count call site (`ring_score`, `satellite_score`,
+`radial_score`, `perimeter_score`, `script_score`, `rune_count_score`, and
+`circular_symmetry`'s own anchor-count term):
+
+```
+diminishing_count(count, target) = count / (count + target × 0.4)
+```
+
+Uncapped and monotonic instead of `(count/target).clamp(0,1)`: `≈0.71` at
+`count == target` (close enough to the old curve's saturated `1.0` that
+existing tier thresholds — §6 — didn't need retuning), `0.83` at
+`2×target`, `0.88` at `3×target`, climbing forever, sub-linearly. This is
+what makes "100 symbols always beats 30 well-drawn ones" true —
+`diminishing_returns_let_more_structure_always_score_higher` (§7) is the
+exit-criterion test.
+
+### 8.3 Containment budget v2
+
+Each `ScopeSpell.containment` is computed the same way the old
+whole-diagram `MagicalCircleSpell.containment` was, but from *that scope's
+own* ring/perimeter counts only:
+
+```
+structural = diminishing_count(ring_count, 2) × 0.6
+           + diminishing_count(perimeter_mark_count, 8) × 0.4   // clamped 0..1
+containment = structural + (1.5 if "safer" ∈ modifiers else 0.0)
+```
+
+— directly implementing the plan's explicit "circle quality, rings,
+perimeter script, safer runes" containment inputs, per scope. In
+`state/evaluate.rs`, `total_potency_excess` walks the whole tree instead of
+computing one flat number:
+
+```
+root capacity    = 2.0 + circle_quality × 6.0 + root.containment × 4.0
+sub-scope capacity = 1.0 + sub.containment × 3.0        // no circle_quality term — a vent has no drawn "circle quality" of its own
+excess(scope)     = max(0, scope's own effect potency − scope's capacity)
+total_excess      = sum of excess(scope) over the whole tree
+stability        -= round(total_excess × 10.0)
+```
+
+A vent's fire potency has to be covered by that vent's own rings and
+wards, not borrowed from the crater's — this is the concrete fix for the
+plan's "circle alone supports a modest total potency" language now applying
+per-scope rather than diagram-wide. Root and sub-scope coefficients are
+still a first cut (§5.7), same caveat as Phase 2's original version.
+
+### 8.4 Recipes as data
+
+`RecipeDef` (`src/data.rs`, loaded into `GameData.recipes` from
+`assets/data/recipes.json` the same way every other asset loads) is a
+named spell as a predicate:
+
+```json
+{
+  "id": "volcano", "name": "Grand Caldera", "tier": 4,
+  "requires": {
+    "effect": { "fire": { "min_potency": 3.0 } },
+    "shape": "cone", "trigger": "continuous",
+    "structure": { "rings": 2, "satellites": 3 },
+    "sub_scopes": [{ "effect": "force", "count": 2 }]
+  }
+}
+```
+
+`crate::recipes::match_recipe(tree, recipes)` (`src/recipes.rs`) evaluates
+`requires` against a `ScopeSpell`:
+
+- **`effect`** — `tree.total_potency(id) ≥ min_potency.max(MIN_EFFECT_PRESENCE)`.
+  A bare `{}` requirement (no explicit `min_potency`, default `0.0`) means
+  "present at all" — `MIN_EFFECT_PRESENCE` (0.001) exists purely so
+  "never drawn" (`total_potency == 0.0`) reads as absent rather than
+  trivially satisfying a `≥ 0.0` check (every real occurrence clears 0.35+
+  anyway, per potency's own clamp).
+- **`shape` / `trigger` / `modifier`** — checked against the **root**
+  scope's own fields only; a diagram's overall shape/trigger character is
+  set by its outermost circle, not by what a vent happens to carry.
+- **`structure`** — checked against the **root** scope's own
+  ring/satellite/radial/perimeter/script counts.
+- **`sub_scopes`** — each `{effect, count}` entry needs at least `count`
+  *direct* `tree.sub_scopes` entries whose own `effects` include that id
+  (not counted recursively deeper — a direct child scope, not a
+  grandchild).
+
+Among every matching recipe, the highest `tier` wins; ties break on the
+lowest `id` (deterministic, same discipline as every other tie-break in
+this codebase). Tier ordering is what lets a more specific recipe beat a
+broader one it also happens to satisfy — `floating_city` (gravity + sphere
++ continuous, tier 4) must outrank `gravity_well` (bare gravity, tier 1)
+whenever both match, so **every recipe roster addition needs a
+strictly-more-specific requirement set to carry a strictly-higher tier**,
+or matching becomes order-dependent by accident.
+
+The roster today (`assets/data/recipes.json`) migrates all four of the old
+hardcoded `spell_name` arms to data (`gravity_well`, `floating_city`,
+`wayfold_gate`, `threshold_calling`, `chronal_ledger`) and adds the plan's
+own two worked examples (`fireball`, `volcano`) — `magical_circle::spell_name`
+now only holds the generic "{prefix} Circle of {effect}" / "{prefix}
+Unbound Circle" fallback for anything that doesn't match a named recipe.
+
+Wiring, in `state/evaluate.rs`:
+
+```
+matched_recipe = scope_spell.and_then(|tree| match_recipe(tree, &data.recipes))
+title = matched_recipe.map(name)
+          .or_else(|| circle_spell.filter(tier_rank ≥ 3).map(name))   // old generic-tier fallback
+          .unwrap_or(base_title)                                      // commission-based title
+```
+
+`signature()` (discovery keying) prefers `matched_recipe.id` when present —
+a stable, semantic key, so every "volcano" is the same discovery regardless
+of minor potency/quality drift — falling back to the pre-Phase-4 sorted
+name-bag for diagrams that don't match any recipe, so arbitrary/unnamed
+combos stay discoverable exactly as before.
+
+### 8.5 Backfire messaging
+
+`text::backfire_cause` (`src/state/text.rs`) is tried before the existing
+generic `text::side_effect` message; when it returns `Some`, that replaces
+the generic message entirely (higher-priority, more specific always wins).
+Priority order: an accident already gets its own message from
+`side_effect` (`backfire_cause` returns `None` immediately, so callers fall
+through rather than double-messaging) → uncontained potency
+(`total_excess > 0.5`, §8.3) → a specifically-*named* missing requirement
+(`evaluate()` now identifies *which* of effect/shape/trigger is missing,
+not just *how many*, reusing the same three id comparisons
+`required_hits`/`matched_request` already made) → duplicate effect runes in
+the same scope → the pre-existing generic weak-marks/grade message. This is
+"failures teach the grammar" (plan item 4) as a first cut — three concrete
+causes, not every way a diagram's rules can be broken (§5.7).
+
+---
+
+## 9. Progression & aids (Phase 5)
+
+Phase 5 is the plan's last phase, and different in character from 0-4: it's
+UX/progression work on top of an already-solid recognizer, not more
+recognizer engineering. One recognizer, one scoring pipeline, throughout —
+every item below changes *which cutoff* a result is compared against or
+*how it's surfaced*, never the underlying identity/quality/circle math in
+§2-§5.
+
+### 9.1 Per-context acceptance bands
+
+`RecognitionContext { Practice, Commission, Sandbox }` (`rune_drawing.rs`)
+replaces the single hardcoded acceptance constants (§2.4, §5.1) with a
+per-context table, `acceptance_band`/`diagram_acceptance_band`:
+
+| Context | confidence | margin | ambiguous-confidence |
+|---|---|---|---|
+| Practice | 0.40 | 0.05 | 0.64 |
+| Commission | 0.32 | 0.04 | 0.58 |
+| Sandbox | 0.24 | 0.03 | 0.50 |
+
+Commission's row is bit-identical to §2.4/§5.1's pre-Phase-5 constants —
+`recognize_rune`/`interpret_diagram` keep their exact original signatures
+and delegate to the new `recognize_rune_in_context`/`interpret_diagram_in_context`
+under `Commission`, so no existing call site or test needed to change.
+Practice (`rune_quality::practice_report_for_rune`) is *stricter* than
+Commission — practice is where technique is taught, so a rough drawing that
+a commission would still accept is rejected here. Sandbox is the most
+lenient, and is not a new screen: it's the existing commission slate
+(`GameSession.sandbox_mode: bool`, toggled by a "Sandbox" button in
+`ui/drawing.rs`, deliberately **not** persisted in `SaveData` — always off
+on load) with `matched_request` trivially true (no commission to fail
+against, §5.4's `evaluate()`) and no delivery reward, the same "free
+experimentation, no stakes" contract Practice already has. Building a
+dedicated Sandbox screen with its own reference panel/layout was
+deliberately not attempted — inheriting the commission slate's UI as-is was
+the bounded first cut.
+
+**Fixed along the way:** `DiagramInterpretation::accepted()` used to
+re-derive `circle_quality ≥ MIN_CIRCLE_QUALITY` — the Commission-only
+constant — regardless of which context actually produced the
+interpretation. Under Sandbox this was silently wrong: `circle_found` was
+correctly computed against Sandbox's looser 0.24 band, but `accepted()`
+would still fail the hardcoded 0.32 check right after. Simplified to
+`circle_found && !runes.is_empty()`, since `circle_found` already encodes
+the right context-aware comparison.
+
+### 9.2 Aids that fade with mastery
+
+`PlayerState.rune_mastery: HashMap<String, RuneMastery>` (`state.rs`,
+`#[serde(default)]` for old saves) tracks `{ accepted_count, quality_sum }`
+per rune id; `RuneMastery::score()` is `accepted_count × mean_quality`.
+Recorded once per accepted rune inside `apply_interpreted_runes` (covers
+both the commission slate and Sandbox) and inside `game.rs::score_practice`
+(covers Practice) — mastery builds from any successful read, not just
+delivered commissions, since both paths read with the same recognizer
+(§9.1).
+
+`ui/drawing.rs`'s guide-template overlay opacity — previously a flat
+constant — is now `GUIDE_BASE_ALPHA / (1.0 + mastery_score /
+GUIDE_FADE_SCALE)`: a monotonic curve that approaches, never hard-cuts to,
+zero as mastery grows, the same "diminishing, not capped" shape as §8.2's
+`diminishing_count`.
+
+A small flat **guide-free bonus** (`GUIDE_FREE_INSIGHT = 1`, `state/work.rs`)
+is awarded when `interpret_drawing` succeeds with `board.guide_templates`
+empty at the moment of interpretation — the payoff for actually going the
+rest of the way to guide-free, surfaced through the same note/journal-entry
+mechanism `DISCOVERY_INSIGHT` already uses.
+
+### 9.3 Friendlier failure surfacing
+
+`rune_diagnostics::player_hint(strokes, runes) -> Option<String>`
+(`rune_diagnostics.rs`) reuses the same typed calls the dev-only
+`diagnose_diagram` clipboard tool already makes
+(`gather_circle_candidates`, `select_working_circle_for_strokes`, cluster
+classification) instead of duplicating logic, and picks the single most
+relevant issue in priority order: no closed shape reads as a circle → the
+circle reads but is too weak → a cluster's identity is ambiguous between
+two close-scoring runes → a rune-sized mark got swallowed as decoration →
+(when accepted) a generic "reads fine, technique could tighten up" for low
+average quality. Returns `None` when nothing stands out — a clean diagram
+gets no hint.
+
+`GameSession::ensure_interpretable` (`state.rs`) calls this for both of its
+rejection branches (no circle / no clear rune), replacing the old generic
+"No enclosing circle was readable." / "circle reads at N%, but no inner
+rune was clear enough" text with the specific hint whenever `player_hint`
+returns one, falling back to the original generic wording only when it
+returns `None` — the same "specific beats generic" pattern §8.5's
+`backfire_cause` already established for evaluation failures.
+`interpret_drawing`'s success-path note also appends the hint (when
+`Some`) after `interpretation_note`'s summary, so borderline-but-accepted
+reads still get the same soft-quality nudge.
+
+### 9.4 Story pacing
+
+No new `CommissionDef` fields or content-authoring pass this phase — the 11
+commissions' difficulty curve (1 through 7) was already coarsely monotonic,
+and re-authoring pacing content is a design task, not an architecture one.
+Scoped to **verification**, per the plan's own exit-criterion wording:
+
+- **Degraded-corpus check**: every difficulty-≤2 commission, drawn with its
+  three required runes run through a seeded ~15%-scale/translate/jitter
+  perturbation (`rune_drawing::test_support::perturb`, the same helper the
+  confusion-matrix gate uses, made `pub(crate)` for this), still clears
+  `matched_request` and never grades `Failed`
+  (`early_commissions_still_clear_acceptance_when_drawn_with_a_degraded_hand`,
+  §7).
+- **Late-game structure check**: the pre-existing
+  `high_tier_circle_strengthens_city_shield_commission` test already covers
+  this exit criterion — `city_shield` (difficulty 7) drawn with
+  `high_tier_city_circle()`'s multi-ring/satellite structure reaches
+  `Brilliant`. No new test was needed; Phase 5 just confirms it's the
+  right regression guard for this claim.
+
+This is the honest current state, not a claim that difficulty gates
+structure: nothing *requires* a late commission to be drawn with structure
+today, only rewards it if it is.
+
+---
+
+*Last updated: 2026-07-04 — Phase 0 through Phase 5 of
+`.project/magic-symbol-system-plan.md` (the plan's final phase).
 Phase 1 remaining: generalize the structural-check layer (§2.3) into
 data-driven rules. Phase 2 remaining: none of the plan's four items are
-outstanding, but the containment budget (§5.4) is explicitly a rough first
-cut for Phase 4 to properly balance, not a tuned final version. Phase 3
-remaining (all documented as deferred where they occur, §5.5-§5.7): the
-full compositional grammar and full containment budget are Phase 4 scope
-by the plan's own split; `best_recovery_window` is order-independent but
-still windows rather than running a true beam search; cross-edit
-recognition caching was not attempted.*
+outstanding, but the containment budget (§8.3) is explicitly a rough first
+cut, not a tuned final version. Phase 3 remaining: `best_recovery_window`
+is order-independent but still windows rather than running a true beam
+search; cross-edit recognition caching was not attempted. Phase 4 remaining
+(§5.7, §8.5): recipe discovery/editing UI beyond the existing ledger/journal
+was not attempted; backfire messaging covers three causes, not every broken
+rule; containment-budget coefficients are still a first cut. Phase 5
+remaining (§9.1): Sandbox reuses the commission slate's UI rather than
+getting its own screen/reference panel; no new pacing content was authored,
+only verification of the existing curve.*

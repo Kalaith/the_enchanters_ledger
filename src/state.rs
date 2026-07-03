@@ -1,10 +1,10 @@
 //! Runtime state, save data, and enchantment evaluation.
 
 use crate::data::{GameConfig, GameData, RuneDef};
-use crate::rune_diagram::{interpret_diagram, DiagramInterpretation};
+use crate::rune_diagram::{interpret_diagram_in_context, DiagramInterpretation};
 use crate::rune_drawing::{canonicalize_stroke, erase_strokes_at, DrawnStroke, StrokePoint};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 mod board;
 mod evaluate;
@@ -22,7 +22,7 @@ pub use board::{
 pub use save::migrate_save_value;
 use text::percent;
 pub use tutorial::TutorialStage;
-pub use work::{DiscoveryReward, JournalEntry, WorkOrderKind, DISCOVERY_INSIGHT};
+pub use work::{DiscoveryReward, JournalEntry, WorkOrderKind, DISCOVERY_INSIGHT, GUIDE_FREE_INSIGHT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GamePhase {
@@ -68,6 +68,36 @@ pub struct PlayerState {
     pub active_work: WorkOrderKind,
     #[serde(default)]
     pub tutorial_stage: TutorialStage,
+    /// Per-rune skill history (plan Phase 5 item 2) — how many times a rune has been read
+    /// (accepted) and how well, on average. Fades the guide-template opacity for that rune in
+    /// the drawing slate (`ui/drawing.rs`) and never resets, so it's a durable measure of
+    /// practice rather than a per-session streak.
+    #[serde(default)]
+    pub rune_mastery: HashMap<String, RuneMastery>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct RuneMastery {
+    pub accepted_count: u32,
+    pub quality_sum: f32,
+}
+
+impl RuneMastery {
+    fn record(&mut self, quality: f32) {
+        self.accepted_count += 1;
+        self.quality_sum += quality.clamp(0.0, 1.0);
+    }
+
+    /// accepted count × mean quality (the plan's own formula) — a rune read once at perfect
+    /// quality and a rune read many times at so-so quality can land at a similar score; both
+    /// represent real, earned familiarity, not just raw repetition.
+    pub fn score(&self) -> f32 {
+        if self.accepted_count == 0 {
+            0.0
+        } else {
+            self.accepted_count as f32 * (self.quality_sum / self.accepted_count as f32)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +150,13 @@ pub struct GameSession {
     pub board: DesignBoard,
     pub discoveries: Vec<DiscoveredRecipe>,
     pub journal: Vec<JournalEntry>,
+    /// Free-experimentation mode (plan Phase 5 item 1) — reuses the ordinary commission slate
+    /// (`board`) rather than a separate screen: while active, `interpret_drawing` reads with
+    /// `RecognitionContext::Sandbox` (the most forgiving acceptance band) and `evaluate()`
+    /// treats the active commission's request as trivially matched, since there is nothing to
+    /// deliver. Deliberately not persisted — like `board.active_stroke`, it's transient UI
+    /// state, not save-worthy game state.
+    pub sandbox_mode: bool,
 }
 
 impl GameSession {
@@ -140,10 +177,28 @@ impl GameSession {
                 current_talisman: 0,
                 active_work: WorkOrderKind::Story,
                 tutorial_stage: TutorialStage::new_game(),
+                rune_mastery: HashMap::new(),
             },
             board: DesignBoard::new(),
             discoveries: Vec::new(),
             journal: Vec::new(),
+            sandbox_mode: false,
+        }
+    }
+
+    /// Toggles `sandbox_mode` on or off, clearing any interpretation feedback tied to the old
+    /// context — a Commission-context "accepted" note left over from before flipping into
+    /// Sandbox (or vice versa) is no longer meaningful.
+    pub fn set_sandbox_mode(&mut self, enabled: bool) {
+        self.sandbox_mode = enabled;
+        self.board.clear_interpretation_feedback();
+    }
+
+    fn recognition_context(&self) -> crate::rune_drawing::RecognitionContext {
+        if self.sandbox_mode {
+            crate::rune_drawing::RecognitionContext::Sandbox
+        } else {
+            crate::rune_drawing::RecognitionContext::Commission
         }
     }
 
@@ -154,6 +209,7 @@ impl GameSession {
             board: save.board,
             discoveries: save.discoveries,
             journal: save.journal,
+            sandbox_mode: false,
         }
     }
 
@@ -320,14 +376,34 @@ impl GameSession {
         }
 
         let unlocked = data.runes.iter().filter(|rune| self.can_use_rune(rune));
-        let interpretation = interpret_diagram(&self.board.drawing_strokes, unlocked);
+        let interpretation = interpret_diagram_in_context(
+            &self.board.drawing_strokes,
+            unlocked,
+            self.recognition_context(),
+        );
         self.board.last_diagram = Some(interpretation.clone());
 
-        self.ensure_interpretable(&interpretation)?;
+        self.ensure_interpretable(data, &interpretation)?;
         self.spend_focus(1.5 + interpretation.runes.len() as f32 * 0.7)?;
+        let guide_free = self.board.guide_templates.is_empty();
         self.apply_interpreted_runes(&interpretation);
 
-        let note = self.interpretation_note(data, &interpretation);
+        let mut note = self.interpretation_note(data, &interpretation);
+        if let Some(hint) = self.player_hint(data) {
+            note.push_str(&format!(" {hint}"));
+        }
+        if guide_free {
+            self.player.insight += GUIDE_FREE_INSIGHT;
+            note.push_str(&format!(
+                " Drawn guide-free: +{GUIDE_FREE_INSIGHT} insight."
+            ));
+            self.add_journal_entry(
+                "Guide-free",
+                format!(
+                    "Read a diagram with no guide templates armed. +{GUIDE_FREE_INSIGHT} insight."
+                ),
+            );
+        }
         self.board.last_interpretation_note = Some(note.clone());
         Ok(note)
     }
@@ -342,30 +418,58 @@ impl GameSession {
 
     fn ensure_interpretable(
         &mut self,
+        data: &GameData,
         interpretation: &DiagramInterpretation,
     ) -> Result<(), String> {
         if !interpretation.circle_found {
+            let message = self.player_hint(data).unwrap_or_else(|| {
+                "The diagram needs an enclosing circle before it can hold meaning.".to_owned()
+            });
             return self.reject_interpretation(
                 "No enclosing circle was readable.".to_owned(),
-                "The diagram needs an enclosing circle before it can hold meaning.".to_owned(),
+                message,
             );
         }
         if !interpretation.accepted() {
             let circle_percent = percent(interpretation.circle_quality);
-            return self.reject_interpretation(
-                format!("Circle {circle_percent}%, but no inner rune was clear enough."),
+            let message = self.player_hint(data).unwrap_or_else(|| {
                 format!(
                     "The circle reads at {circle_percent}%, but no inner rune is clear enough."
-                ),
+                )
+            });
+            return self.reject_interpretation(
+                format!("Circle {circle_percent}%, but no inner rune was clear enough."),
+                message,
             );
         }
         Ok(())
+    }
+
+    /// Plan Phase 5 item 3: picks the single most relevant reason a diagram read poorly (or
+    /// could read better), reusing the same typed recognition calls the dev-only
+    /// `diagnose_diagram` clipboard tool already makes. `None` means the diagram looks clean —
+    /// callers fall back to their existing generic wording in that case.
+    fn player_hint(&self, data: &GameData) -> Option<String> {
+        let unlocked = data.runes.iter().filter(|rune| self.can_use_rune(rune));
+        crate::rune_diagnostics::player_hint(&self.board.drawing_strokes, unlocked)
     }
 
     fn reject_interpretation(&mut self, note: String, error: String) -> Result<(), String> {
         self.board.last_interpretation_note = Some(note);
         self.spend_focus(0.8)?;
         Err(error)
+    }
+
+    /// Records one accepted read of `rune_id` at `quality` toward its mastery history (plan
+    /// Phase 5 item 2). Shared by `apply_interpreted_runes` (commission slate, Sandbox) and the
+    /// Practice slate's own scoring path (`game.rs::score_practice`) — both read with the same
+    /// recognizer (item 1), so both should build the same skill history.
+    pub fn record_rune_mastery(&mut self, rune_id: &str, quality: f32) {
+        self.player
+            .rune_mastery
+            .entry(rune_id.to_owned())
+            .or_default()
+            .record(quality);
     }
 
     fn apply_interpreted_runes(&mut self, interpretation: &DiagramInterpretation) {
@@ -377,6 +481,10 @@ impl GameSession {
             occupied.insert(node);
             placed_nodes.push(node);
             self.board.place(node, &rune.rune_id, rune.quality, rune.potency);
+            // Mastery (plan Phase 5 item 2): every accepted read counts, not just delivered
+            // commissions — Sandbox builds the same skill history as commissioned work, since
+            // both read with the same recognizer, just different acceptance bands (item 1).
+            self.record_rune_mastery(&rune.rune_id, rune.quality);
         }
         for nodes in placed_nodes.windows(2) {
             let link = Link::new(nodes[0], nodes[1]);

@@ -7,10 +7,11 @@ use super::widgets::{
 };
 use super::{UiAction, UiContext};
 use crate::rune_drawing::{template_strokes_for_rune, StrokePoint};
-use crate::state::GuideTemplate;
+use crate::state::{GuideTemplate, RuneMastery};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 use macroquad_toolkit::ui::draw_ui_text_ex;
+use std::collections::HashMap;
 
 const INK_THICKNESS: f32 = 5.0;
 
@@ -47,6 +48,7 @@ pub(super) fn draw_drawing_slate(
         ctx.interpretation_feedback_active
             .then_some(ctx.session.board.last_diagram.as_ref())
             .flatten(),
+        &ctx.session.player.rune_mastery,
     );
     if ctx.session.board.template_armed {
         if let Some(rune_id) = ctx.session.board.selected_rune.as_deref() {
@@ -244,8 +246,25 @@ pub(super) fn draw_drawing_slate(
     ) {
         actions.push(UiAction::CopyDiagnostics);
     }
+    if virtual_button(
+        Rect::new(controls.x + 396.0, controls.y + 34.0, 84.0, 26.0),
+        if ctx.session.sandbox_mode {
+            "Sandbox*"
+        } else {
+            "Sandbox"
+        },
+        !drawing_active,
+        if ctx.session.sandbox_mode {
+            ButtonTone::Positive
+        } else {
+            ButtonTone::Muted
+        },
+        mouse,
+    ) {
+        actions.push(UiAction::ToggleSandboxMode);
+    }
 
-    let note_x = controls.x + 404.0;
+    let note_x = controls.x + 490.0;
     if let Some(note) = &ctx.session.board.last_interpretation_note {
         draw_text_block(
             note,
@@ -360,21 +379,36 @@ fn guide_template_remove_handle_hit(
         })
 }
 
+/// Base guide-line alpha at zero mastery — unchanged from the pre-Phase-5 hardcoded value, so a
+/// rune drawn for the first time still gets the same full-strength guide it always has.
+const GUIDE_BASE_ALPHA: f32 = 0.32;
+/// How much mastery it takes to meaningfully fade a guide (plan Phase 5 item 2): the curve is
+/// `1.0 / (1.0 + score / GUIDE_FADE_SCALE)`, so alpha is halved around `score ==
+/// GUIDE_FADE_SCALE` and keeps approaching (never hard-cutting to) zero beyond it — the same
+/// diminishing-not-capped shape as `magical_circle::diminishing_count`, reused here for the same
+/// reason: no cliff a single extra practice rep could visibly jump across.
+const GUIDE_FADE_SCALE: f32 = 6.0;
+
 fn draw_guide_templates(
     templates: &[GuideTemplate],
     rect: Rect,
     diagram: Option<&crate::rune_diagram::DiagramInterpretation>,
+    rune_mastery: &HashMap<String, RuneMastery>,
 ) {
     for template in templates {
         if let Some(diagram) = diagram {
             draw_guide_feedback(template, rect, guide_template_was_read(template, diagram));
         }
+        let score = rune_mastery
+            .get(&template.rune_id)
+            .map_or(0.0, RuneMastery::score);
+        let alpha = GUIDE_BASE_ALPHA / (1.0 + score / GUIDE_FADE_SCALE);
         draw_guide_template_at(
             &template.rune_id,
             template.center,
             template.scale,
             rect,
-            Color::new(0.40, 0.27, 0.10, 0.32),
+            Color::new(0.40, 0.27, 0.10, alpha),
             1.8,
         );
     }

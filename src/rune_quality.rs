@@ -2,9 +2,9 @@
 
 use crate::data::RuneDef;
 use crate::rune_drawing::{
-    merge_continuation_strokes, recognize_rune, shape_report_for_rune, stroke_assignment,
-    template_strokes_for_rune, template_variants_for_rune, DrawnStroke, ShapeIssue, StrokePoint,
-    MIN_RECOGNITION_CONFIDENCE,
+    acceptance_band, merge_continuation_strokes, recognize_rune_in_context, shape_report_for_rune,
+    stroke_assignment, template_strokes_for_rune, template_variants_for_rune, DrawnStroke,
+    RecognitionContext, ShapeIssue, StrokePoint,
 };
 
 #[derive(Debug, Clone)]
@@ -64,13 +64,17 @@ fn best_variant_scores(rune_id: &str, strokes: &[DrawnStroke]) -> Option<StrictS
         .reduce(|best, next| if next.quality > best.quality { next } else { best })
 }
 
+/// Scores a Practice-slate drawing (plan Phase 5 item 1): recognition itself is identical to
+/// everywhere else, but acceptance uses `RecognitionContext::Practice`'s stricter band — this is
+/// where correct technique is taught, so a mark that would pass in commission work still gets
+/// flagged here.
 pub fn practice_report_for_rune<'a>(
     rune_id: &str,
     strokes: &[DrawnStroke],
     runes: impl IntoIterator<Item = &'a RuneDef>,
 ) -> Option<RunePracticeReport> {
     let scores = best_variant_scores(rune_id, strokes)?;
-    let recognized = recognize_rune(strokes, runes);
+    let recognized = recognize_rune_in_context(strokes, runes, RecognitionContext::Practice);
     let shape_score = scores.shape;
     let start_score = scores.start;
     let stroke_order_score = scores.order;
@@ -127,7 +131,7 @@ fn practice_feedback(
     if let Some(issue) = issue {
         return issue.message().to_owned();
     }
-    if confidence < MIN_RECOGNITION_CONFIDENCE {
+    if confidence < acceptance_band(RecognitionContext::Practice).confidence {
         return "The mark is not readable yet. Trace the ghost lines and keep each stroke separate."
             .to_owned();
     }
@@ -477,6 +481,7 @@ fn distance(a: StrokePoint, b: StrokePoint) -> f32 {
 mod tests {
     use super::*;
     use crate::data::GameData;
+    use crate::rune_drawing::recognize_rune;
 
     #[test]
     fn circle_reads_with_wrong_start_but_scores_lower() {

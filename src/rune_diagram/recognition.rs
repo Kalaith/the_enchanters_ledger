@@ -1,8 +1,9 @@
 use super::geometry::{cluster_strokes, distance, StrokeBounds, StrokeCluster};
-use super::{InterpretedRune, MIN_DIAGRAM_RUNE_CONFIDENCE};
+use super::{diagram_acceptance_band, InterpretedRune};
 use crate::data::{RuneCategory, RuneDef};
 use crate::rune_drawing::{
-    recognize_rune, template_strokes_for_rune, DrawnStroke, RecognitionOutcome, StrokePoint,
+    recognize_rune_in_context, template_strokes_for_rune, DrawnStroke, RecognitionContext,
+    RecognitionOutcome, StrokePoint,
 };
 
 const MIN_RECOVERED_RUNE_CONFIDENCE: f32 = 0.52;
@@ -17,10 +18,19 @@ const MIN_RECOVERED_RUNE_CONFIDENCE: f32 = 0.52;
 /// drawn cleanly at its own canonical shape.
 const MIN_RUNE_CLUSTER_POINTS: usize = 4;
 
+/// A scope's bounds plus the acceptance context runes inside it are read with (plan Phase 5 item
+/// 1), bundled since every recognition-path function needs both together, and separately they'd
+/// push several of these functions over clippy's argument-count lint.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ScopeContext {
+    pub(super) bounds: StrokeBounds,
+    pub(super) recognition: RecognitionContext,
+}
+
 pub(super) fn extract_overlapped_spheres(
     cluster: &StrokeCluster,
     available_runes: &[&RuneDef],
-    circle_bounds: StrokeBounds,
+    scope: ScopeContext,
     interpreted: &mut Vec<InterpretedRune>,
     rejected_marks: &mut usize,
 ) -> bool {
@@ -28,7 +38,11 @@ pub(super) fn extract_overlapped_spheres(
         return false;
     }
 
-    if let Some(recognized) = recognize_rune(&cluster.strokes, available_runes.iter().copied()) {
+    if let Some(recognized) = recognize_rune_in_context(
+        &cluster.strokes,
+        available_runes.iter().copied(),
+        scope.recognition,
+    ) {
         let category = available_runes
             .iter()
             .find(|rune| rune.id == recognized.rune_id)
@@ -40,22 +54,24 @@ pub(super) fn extract_overlapped_spheres(
         }
     }
 
+    let diagram_rune_confidence = diagram_acceptance_band(scope.recognition).diagram_rune;
     let mut sphere_indices = Vec::new();
     for (index, stroke) in cluster.strokes.iter().enumerate() {
         let Some(bounds) = StrokeBounds::from_stroke(stroke) else {
             continue;
         };
-        let Some(recognized) = recognize_rune(
+        let Some(recognized) = recognize_rune_in_context(
             std::slice::from_ref(stroke),
             available_runes.iter().copied(),
+            scope.recognition,
         ) else {
             continue;
         };
-        if recognized.rune_id == "sphere" && recognized.confidence >= MIN_DIAGRAM_RUNE_CONFIDENCE {
+        if recognized.rune_id == "sphere" && recognized.confidence >= diagram_rune_confidence {
             push_recognized_rune(
                 recognized,
                 bounds,
-                circle_bounds,
+                scope,
                 stroke.points.len(),
                 available_runes,
                 interpreted,
@@ -79,11 +95,15 @@ pub(super) fn extract_overlapped_spheres(
             *rejected_marks += 1;
             continue;
         };
-        if let Some(recognized) = recognize_rune(&remaining, available_runes.iter().copied()) {
+        if let Some(recognized) = recognize_rune_in_context(
+            &remaining,
+            available_runes.iter().copied(),
+            scope.recognition,
+        ) {
             push_recognized_rune(
                 recognized,
                 bounds,
-                circle_bounds,
+                scope,
                 total_points(&remaining),
                 available_runes,
                 interpreted,
@@ -100,25 +120,29 @@ pub(super) fn extract_overlapped_spheres(
 pub(super) fn recover_contaminated_multi_stroke_rune(
     cluster: &StrokeCluster,
     available_runes: &[&RuneDef],
-    circle_bounds: StrokeBounds,
+    scope: ScopeContext,
     interpreted: &mut Vec<InterpretedRune>,
     rejected_marks: &mut usize,
 ) -> bool {
     if cluster.strokes.len() < 3 {
         return false;
     }
-    if recognize_rune(&cluster.strokes, available_runes.iter().copied())
-        .is_some_and(|recognized| recognized.accepted)
+    if recognize_rune_in_context(
+        &cluster.strokes,
+        available_runes.iter().copied(),
+        scope.recognition,
+    )
+    .is_some_and(|recognized| recognized.accepted)
     {
         return false;
     }
-    let Some(recovery) = best_recovery_window(cluster, available_runes) else {
+    let Some(recovery) = best_recovery_window(cluster, available_runes, scope.recognition) else {
         return false;
     };
     push_recognized_rune(
         recovery.recognized,
         recovery.bounds,
-        circle_bounds,
+        scope,
         recovery.total_points,
         available_runes,
         interpreted,
@@ -144,6 +168,7 @@ struct RecoveredWindow {
 fn best_recovery_window(
     cluster: &StrokeCluster,
     available_runes: &[&RuneDef],
+    context: RecognitionContext,
 ) -> Option<RecoveredWindow> {
     let ordered = spatial_order(cluster);
     let mut best = None::<RecoveredWindow>;
@@ -161,7 +186,9 @@ fn best_recovery_window(
             if points < MIN_RUNE_CLUSTER_POINTS {
                 continue;
             }
-            let Some(recognized) = recognize_rune(strokes, available_runes.iter().copied()) else {
+            let Some(recognized) =
+                recognize_rune_in_context(strokes, available_runes.iter().copied(), context)
+            else {
                 continue;
             };
             if !is_recoverable_multi_stroke_rune(&recognized, strokes.len(), available_runes) {
@@ -284,13 +311,13 @@ fn remaining_stroke_groups(
 pub(super) fn push_recognized_rune(
     recognized: RecognitionOutcome,
     bounds: StrokeBounds,
-    circle_bounds: StrokeBounds,
+    scope: ScopeContext,
     total_points: usize,
     available_runes: &[&RuneDef],
     interpreted: &mut Vec<InterpretedRune>,
     rejected_marks: &mut usize,
 ) {
-    if recognized.confidence < MIN_DIAGRAM_RUNE_CONFIDENCE {
+    if recognized.confidence < diagram_acceptance_band(scope.recognition).diagram_rune {
         *rejected_marks += 1;
         return;
     }
@@ -299,8 +326,8 @@ pub(super) fn push_recognized_rune(
         return;
     }
     let center = bounds.center();
-    let scale = bounds.scale_relative(circle_bounds);
-    let orbit = normalized_orbit(center, circle_bounds);
+    let scale = bounds.scale_relative(scope.bounds);
+    let orbit = normalized_orbit(center, scope.bounds);
     let category = available_runes
         .iter()
         .find(|rune| rune.id == recognized.rune_id)

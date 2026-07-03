@@ -1,20 +1,35 @@
 //! Recursive containment hierarchy (plan Phase 3 item 2): a working circle can enclose its own
 //! ring-like sub-circles, each interpreted with its own local coordinate frame ("scope") exactly
 //! like the top-level circle is — a ring that turns out to enclose ink of its own is treated as a
-//! composite glyph rather than plain `ReinforcementRing` decoration. This is a first cut: scopes
-//! fold their runes into one flat list (which `analyze_magical_circle` already consumes via
-//! `InterpretedRune::scale`/`orbit`, both already relative to whatever bounds they were scored
-//! against), not a full compositional grammar — see prd.md §5.5 for what's still Phase 4 scope.
+//! composite glyph rather than plain `ReinforcementRing` decoration. As of Phase 4, sub-scopes are
+//! *not* flattened away: `ScopeOutcome` keeps each nested scope as its own node
+//! (`sub_scopes: Vec<ScopeOutcome>`), and `flatten_runes`/`build_scope_spell` (below) are the two
+//! separate views callers need — a flat `Vec<InterpretedRune>` for everything that scores runes
+//! individually (unchanged from Phase 3), and a `ScopeSpell` tree for the recipe grammar
+//! (plan Phase 4 item 1, `crate::recipes`).
 
 use super::circle::{is_inside_working_circle, ring_shape_score};
 use super::geometry::{cluster_strokes, StrokeBounds};
 use super::recognition::{
     extract_overlapped_spheres, push_recognized_rune, recover_contaminated_multi_stroke_rune,
+    ScopeContext,
 };
-use super::{is_circle_structure, InterpretedRune};
-use crate::data::RuneDef;
-use crate::magical_circle::{classify_circle_stroke, CircleBounds, CircleMark};
-use crate::rune_drawing::{recognize_rune, DrawnStroke};
+use super::{is_circle_structure, InterpretedRune, ScopeSpell};
+use crate::data::{RuneCategory, RuneDef};
+use crate::magical_circle::{
+    classify_circle_stroke, diminishing_count, CircleBounds, CircleMark, CircleStrokeKind,
+};
+use crate::rune_drawing::{recognize_rune_in_context, DrawnStroke, RecognitionContext};
+
+/// Fixed containment bonus a scope earns for having a `safer` modifier rune among its own ink —
+/// plan Phase 4 item 2's explicit "circle quality, rings, perimeter script, safer runes"
+/// containment inputs.
+const SAFER_CONTAINMENT_BONUS: f32 = 1.5;
+/// Targets the per-scope `diminishing_count` (see `magical_circle::diminishing_count`) ring/
+/// perimeter contributions are measured against — deliberately smaller than the whole-diagram
+/// targets in `magical_circle.rs`, since a single nested scope is a much smaller composition.
+const SCOPE_RING_TARGET: usize = 2;
+const SCOPE_PERIMETER_TARGET: usize = 8;
 
 /// Recursion cap — bounds worst-case cost on adversarial/degenerate geometry and matches the
 /// plan's expectation of a handful of nesting levels (working circle -> vent -> sub-seal), not
@@ -36,7 +51,11 @@ const MIN_NESTED_RING_QUALITY: f32 = 0.40;
 const NESTED_RING_MIN_ORBIT: f32 = 0.20;
 
 pub(crate) struct ScopeOutcome {
-    pub(crate) runes: Vec<InterpretedRune>,
+    /// Runes recognized directly in this scope — does *not* include sub-scope runes; see
+    /// `flatten_runes`/`build_scope_spell` for the two different ways callers reassemble this
+    /// with `sub_scopes` below.
+    pub(crate) own_runes: Vec<InterpretedRune>,
+    pub(crate) sub_scopes: Vec<ScopeOutcome>,
     pub(crate) rejected_marks: usize,
     pub(crate) circle_marks: Vec<CircleMark>,
 }
@@ -49,6 +68,7 @@ pub(crate) fn interpret_scope(
     scope_bounds: StrokeBounds,
     available_runes: &[&RuneDef],
     depth: u32,
+    context: RecognitionContext,
 ) -> ScopeOutcome {
     let spell_bounds = CircleBounds::new(
         scope_bounds.min_x,
@@ -63,7 +83,8 @@ pub(crate) fn interpret_scope(
         })
         .collect::<Vec<_>>();
 
-    let mut runes = Vec::new();
+    let mut own_runes = Vec::new();
+    let mut sub_scopes = Vec::new();
     let mut rejected_marks = 0usize;
     let mut consumed = Vec::<usize>::new();
 
@@ -87,9 +108,9 @@ pub(crate) fn interpret_scope(
                 // `classified_marks` above).
                 continue;
             }
-            let sub = interpret_scope(&nested_ink, ring_bounds, available_runes, depth + 1);
-            runes.extend(sub.runes);
+            let sub = interpret_scope(&nested_ink, ring_bounds, available_runes, depth + 1, context);
             rejected_marks += sub.rejected_marks;
+            sub_scopes.push(sub);
             consumed.push(ring_index);
             consumed.extend(nested_ink.into_iter().map(|(index, _)| index));
         }
@@ -105,13 +126,17 @@ pub(crate) fn interpret_scope(
         .map(|(index, stroke)| (*index, stroke.clone()))
         .collect::<Vec<_>>();
 
+    let scope = ScopeContext {
+        bounds: scope_bounds,
+        recognition: context,
+    };
     let clusters = cluster_strokes(&inner_strokes);
     for cluster in clusters {
         if extract_overlapped_spheres(
             &cluster,
             available_runes,
-            scope_bounds,
-            &mut runes,
+            scope,
+            &mut own_runes,
             &mut rejected_marks,
         ) {
             continue;
@@ -119,13 +144,14 @@ pub(crate) fn interpret_scope(
         if recover_contaminated_multi_stroke_rune(
             &cluster,
             available_runes,
-            scope_bounds,
-            &mut runes,
+            scope,
+            &mut own_runes,
             &mut rejected_marks,
         ) {
             continue;
         }
-        let Some(recognized) = recognize_rune(&cluster.strokes, available_runes.iter().copied())
+        let Some(recognized) =
+            recognize_rune_in_context(&cluster.strokes, available_runes.iter().copied(), context)
         else {
             rejected_marks += 1;
             continue;
@@ -138,19 +164,89 @@ pub(crate) fn interpret_scope(
         push_recognized_rune(
             recognized,
             cluster.bounds,
-            scope_bounds,
+            scope,
             total_points,
             available_runes,
-            &mut runes,
+            &mut own_runes,
             &mut rejected_marks,
         );
     }
 
     ScopeOutcome {
-        runes,
+        own_runes,
+        sub_scopes,
         rejected_marks,
         circle_marks: classified_marks.into_iter().map(|(_, mark)| mark).collect(),
     }
+}
+
+/// Recreates Phase 3's flat `Vec<InterpretedRune>` (every scope's own runes, depth-first) — every
+/// existing consumer of `DiagramInterpretation.runes` (UI, `evaluate()`'s per-rune stat math,
+/// tests) keeps working unchanged; only `build_scope_spell` (below) needs the tree shape.
+pub(crate) fn flatten_runes(outcome: &ScopeOutcome) -> Vec<InterpretedRune> {
+    let mut runes = outcome.own_runes.clone();
+    for sub in &outcome.sub_scopes {
+        runes.extend(flatten_runes(sub));
+    }
+    runes
+}
+
+/// Builds the recipe-grammar view of `outcome` (plan Phase 4 item 1, `crate::recipes`): unlike
+/// `flatten_runes`, sub-scopes stay nested rather than being folded in, and this scope's own
+/// runes are grouped by category instead of kept as a flat list.
+pub(crate) fn build_scope_spell(outcome: &ScopeOutcome, rune_defs: &[&RuneDef]) -> ScopeSpell {
+    let mut effects = Vec::new();
+    let mut shape = None;
+    let mut trigger = None;
+    let mut modifiers = Vec::new();
+    for rune in &outcome.own_runes {
+        let Some(def) = rune_defs.iter().find(|def| def.id == rune.rune_id) else {
+            continue;
+        };
+        match def.category {
+            RuneCategory::Effect => effects.push((rune.rune_id.clone(), rune.potency)),
+            RuneCategory::Shape if shape.is_none() => shape = Some(rune.rune_id.clone()),
+            RuneCategory::Trigger if trigger.is_none() => trigger = Some(rune.rune_id.clone()),
+            RuneCategory::Modifier => modifiers.push(rune.rune_id.clone()),
+            _ => {}
+        }
+    }
+
+    let ring_count = count_kind(&outcome.circle_marks, CircleStrokeKind::ReinforcementRing);
+    let satellite_count = count_kind(&outcome.circle_marks, CircleStrokeKind::SatelliteSeal);
+    let radial_count = count_kind(&outcome.circle_marks, CircleStrokeKind::RadialSpoke);
+    let perimeter_mark_count = count_kind(&outcome.circle_marks, CircleStrokeKind::PerimeterMark);
+    let script_mark_count = count_kind(&outcome.circle_marks, CircleStrokeKind::ScriptMark);
+    let structural = (diminishing_count(ring_count, SCOPE_RING_TARGET) * 0.6
+        + diminishing_count(perimeter_mark_count, SCOPE_PERIMETER_TARGET) * 0.4)
+        .clamp(0.0, 1.0);
+    let safer_bonus = if modifiers.iter().any(|id| id == "safer") {
+        SAFER_CONTAINMENT_BONUS
+    } else {
+        0.0
+    };
+
+    ScopeSpell {
+        effects,
+        shape,
+        trigger,
+        modifiers,
+        ring_count,
+        satellite_count,
+        radial_count,
+        perimeter_mark_count,
+        script_mark_count,
+        containment: structural + safer_bonus,
+        sub_scopes: outcome
+            .sub_scopes
+            .iter()
+            .map(|sub| build_scope_spell(sub, rune_defs))
+            .collect(),
+    }
+}
+
+fn count_kind(marks: &[CircleMark], kind: CircleStrokeKind) -> usize {
+    marks.iter().filter(|mark| mark.kind == kind).count()
 }
 
 /// Closed strokes inside `ink` that are plausibly a nested scope's own ring: a large-relative-to-

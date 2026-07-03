@@ -1,5 +1,6 @@
 use super::*;
 use crate::data::{CommissionDef, GameData};
+use crate::rune_drawing::test_support::perturb;
 use crate::rune_drawing::{template_strokes_for_rune, DrawnStroke, StrokePoint};
 
 fn data() -> GameData {
@@ -56,6 +57,33 @@ fn tutorial_starts_with_light_then_unlocks_shape_trigger_and_rank_one() {
 
     let _ = session.research(&data);
     assert_eq!(session.player.tutorial_stage, TutorialStage::Complete);
+}
+
+#[test]
+fn accepted_reads_accumulate_rune_mastery() {
+    // Plan Phase 5 item 2: "aids that fade with mastery" needs a real per-rune history first —
+    // every accepted read (commission slate here; Practice is covered separately in game.rs's
+    // score_practice) accumulates, it doesn't just remember the most recent draw.
+    let data = data();
+    let mut session = unlocked_session(&data);
+    session.board.drawing_strokes = circled_diagram(&[
+        ("light", 0.26, 0.50),
+        ("sphere", 0.50, 0.50),
+        ("continuous", 0.74, 0.50),
+    ]);
+    session.interpret_drawing(&data).unwrap();
+
+    let light = session.player.rune_mastery.get("light").copied().unwrap();
+    assert_eq!(light.accepted_count, 1, "{light:?}");
+    assert!(light.score() > 0.0, "{light:?}");
+
+    session.interpret_drawing(&data).unwrap();
+    let light_again = session.player.rune_mastery.get("light").copied().unwrap();
+    assert_eq!(light_again.accepted_count, 2, "{light_again:?}");
+    assert!(
+        light_again.score() > light.score(),
+        "first={light:?} second={light_again:?}"
+    );
 }
 
 #[test]
@@ -362,6 +390,39 @@ fn legacy_save_migrates_to_current_shape() {
 }
 
 #[test]
+fn guide_free_interpretation_earns_insight_bonus_but_guided_does_not() {
+    // Plan Phase 5 item 2: "eventually rewards guide-free drawing with an insight bonus."
+    let data = data();
+    let mut guided = unlocked_session(&data);
+    guided
+        .place_guide_template(StrokePoint::new(0.26, 0.50), &data)
+        .unwrap();
+    let insight_before_guided = guided.player.insight;
+    guided.board.drawing_strokes = circled_diagram(&[
+        ("light", 0.26, 0.50),
+        ("sphere", 0.50, 0.50),
+        ("continuous", 0.74, 0.50),
+    ]);
+    guided.interpret_drawing(&data).unwrap();
+    assert_eq!(guided.player.insight, insight_before_guided, "{guided:?}");
+
+    let mut free = unlocked_session(&data);
+    let insight_before_free = free.player.insight;
+    free.board.drawing_strokes = circled_diagram(&[
+        ("light", 0.26, 0.50),
+        ("sphere", 0.50, 0.50),
+        ("continuous", 0.74, 0.50),
+    ]);
+    let note = free.interpret_drawing(&data).unwrap();
+    assert_eq!(
+        free.player.insight,
+        insight_before_free + GUIDE_FREE_INSIGHT,
+        "{free:?}"
+    );
+    assert!(note.contains("guide-free"), "{note}");
+}
+
+#[test]
 fn guide_templates_do_not_score_as_inked_runes() {
     let data = data();
     let mut session = GameSession::new(&data.config);
@@ -451,6 +512,19 @@ fn starting_new_ink_clears_previous_interpretation_state() {
 }
 
 #[test]
+fn circle_free_diagram_rejection_surfaces_the_specific_player_hint() {
+    let data = data();
+    let mut session = unlocked_session(&data);
+    session.board.drawing_strokes = template_at("light", 0.50, 0.50, 0.18);
+
+    let error = session.interpret_drawing(&data).unwrap_err();
+    assert_eq!(
+        error,
+        "No closed shape reads as a circle yet — draw one continuous loop around your runes."
+    );
+}
+
+#[test]
 fn deselect_rune_cancels_armed_template_placement() {
     let data = data();
     let mut session = GameSession::new(&data.config);
@@ -498,6 +572,124 @@ fn high_tier_circle_strengthens_city_shield_commission() {
         report.result
     );
     assert!(report.result.power >= 40, "{:?}", report.result);
+}
+
+#[test]
+fn early_commissions_still_clear_acceptance_when_drawn_with_a_degraded_hand() {
+    let data = data();
+    let early = data
+        .commissions
+        .iter()
+        .filter(|commission| commission.difficulty <= 2)
+        .collect::<Vec<_>>();
+    assert!(!early.is_empty());
+
+    for commission in early {
+        let mut session = unlocked_session(&data);
+        session.player.workshop_rank = 4;
+        session.player.current_commission = data
+            .commissions
+            .iter()
+            .position(|candidate| candidate.id == commission.id)
+            .unwrap();
+        session.board.drawing_strokes = degraded_circled_order(commission);
+
+        session.interpret_drawing(&data).unwrap_or_else(|error| {
+            panic!("{} failed to interpret when drawn with jitter: {error}", commission.id)
+        });
+        let report = session.test_design(&data);
+        assert!(
+            report.result.matched_request,
+            "{} did not match its own requirements once jittered: {:?}",
+            commission.id, report.result
+        );
+        assert_ne!(
+            report.result.grade,
+            EnchantGrade::Failed,
+            "{} graded Failed once jittered: {:?}",
+            commission.id, report.result
+        );
+    }
+}
+
+#[test]
+fn diminishing_returns_let_more_structure_always_score_higher() {
+    // Plan Phase 4 item 1 / C6 exit criterion: complexity/containment/intensity no longer
+    // hard-cap at a fixed structural-mark target (`diminishing_count` replaces `ratio_count`,
+    // see magical_circle.rs) — a diagram with structure well beyond the old fixed targets must
+    // score higher than one that stays within them, given the same core rune content.
+    let data = data();
+    let mut small = unlocked_session(&data);
+    small.board.drawing_strokes = structured_circle(1, 2, 2, 6, 8);
+    small.interpret_drawing(&data).unwrap();
+    let small_report = small.test_design(&data);
+
+    let mut large = unlocked_session(&data);
+    large.board.drawing_strokes = structured_circle(6, 12, 10, 40, 70);
+    large.interpret_drawing(&data).unwrap();
+    let large_report = large.test_design(&data);
+
+    assert!(
+        large_report.result.score > small_report.result.score,
+        "small={:?} large={:?}",
+        small_report.result,
+        large_report.result
+    );
+}
+
+#[test]
+fn backfire_message_names_uncontained_potency() {
+    // Plan Phase 4 item 4: a diagram with a lot of drawn effect potency and no containment
+    // structure at all (no rings, no `safer` rune) gets a cause-specific backfire message
+    // instead of the old generic "ragged strokes leak value" one.
+    let data = data();
+    let mut session = unlocked_session(&data);
+    let mut strokes = outer_circle();
+    for index in 0..8 {
+        let angle = std::f32::consts::TAU * index as f32 / 8.0;
+        let cx = 0.50 + 0.22 * angle.cos();
+        let cy = 0.50 + 0.22 * angle.sin();
+        strokes.extend(template_at("spark", cx, cy, 0.24));
+    }
+    session.board.drawing_strokes = strokes;
+
+    session.interpret_drawing(&data).unwrap();
+    let report = session.test_design(&data);
+
+    assert!(
+        report.result.side_effect.contains("can't hold everything drawn"),
+        "{:?}",
+        report.result
+    );
+}
+
+/// A working circle with a fixed `gravity` + `sphere` + `continuous` + `safer` core plus
+/// caller-chosen structural-mark counts — used to compare how score scales with structure
+/// well past `magical_circle.rs`'s old fixed targets (rings 3, satellites 5, radials 4,
+/// perimeter 14, scripts 28).
+fn structured_circle(
+    rings: usize,
+    satellites: usize,
+    radials: usize,
+    perimeter: usize,
+    scripts: usize,
+) -> Vec<DrawnStroke> {
+    let mut strokes = outer_circle();
+    for index in 0..rings {
+        // Each concentric ring's diameter stays within `ReinforcementRing`'s valid scale band
+        // (0.28..=0.92 relative to the working circle) for up to 6 rings.
+        let rx = 0.13 + index as f32 * 0.014;
+        strokes.extend(rough_circle(0.50, 0.50, rx, rx * 0.95, 28));
+    }
+    strokes.extend(template_at("gravity", 0.28, 0.48, 0.22));
+    strokes.extend(template_at("sphere", 0.50, 0.50, 0.18));
+    strokes.extend(template_at("continuous", 0.73, 0.48, 0.17));
+    strokes.extend(template_at("safer", 0.50, 0.73, 0.15));
+    strokes.extend(satellite_seals(satellites, 0.30, 0.038));
+    strokes.extend(radial_spokes(radials, 0.31));
+    strokes.extend(perimeter_ticks(perimeter, 0.39, 0.016));
+    strokes.extend(script_marks(scripts, 0.27, 0.008));
+    strokes
 }
 
 fn circled_diagram(runes: &[(&str, f32, f32)]) -> Vec<DrawnStroke> {
@@ -790,6 +982,35 @@ fn template_at(rune_id: &str, cx: f32, cy: f32, scale: f32) -> Vec<DrawnStroke> 
         .collect()
 }
 
+/// Plan Phase 5 item 4: a degraded (but not sloppy) hand — roughly a 15% scale
+/// wobble plus per-point noise — applied to a clean template before it is
+/// placed on the slate. Reuses `perturb`, the same seeded jitter the
+/// confusion-matrix gate (`rune_drawing::confusion_gate`) already exercises.
+fn jittered_template_at(rune_id: &str, cx: f32, cy: f32, scale: f32, seed: u64) -> Vec<DrawnStroke> {
+    let raw = template_strokes_for_rune(rune_id).unwrap();
+    let degraded = perturb(&raw, 0.85, (0.02, -0.02), 0.015, seed);
+    degraded
+        .into_iter()
+        .map(|stroke| DrawnStroke {
+            points: stroke
+                .points
+                .into_iter()
+                .map(|point| {
+                    StrokePoint::new(cx + (point.x - 0.5) * scale, cy + (point.y - 0.5) * scale)
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+fn degraded_circled_order(order: &CommissionDef) -> Vec<DrawnStroke> {
+    let mut strokes = outer_circle();
+    strokes.extend(jittered_template_at(&order.required_effect, 0.26, 0.50, 0.18, 11));
+    strokes.extend(jittered_template_at(&order.required_shape, 0.50, 0.50, 0.18, 22));
+    strokes.extend(jittered_template_at(&order.required_trigger, 0.74, 0.50, 0.18, 33));
+    strokes
+}
+
 fn placed_ids(session: &GameSession) -> Vec<String> {
     session
         .board
@@ -797,4 +1018,86 @@ fn placed_ids(session: &GameSession) -> Vec<String> {
         .iter()
         .map(|rune| rune.rune_id.clone())
         .collect()
+}
+
+#[test]
+fn simple_named_recipe_still_recognized_through_evaluate() {
+    // Regression guard for the other migrated named recipes (plan Phase 4 item 3): the
+    // `floating_stage` commission requires `gravity` (tier 4, so `workshop_rank` must be raised
+    // or the recognizer correctly falls back to the best *unlocked* alternative — this tripped
+    // up this test's first draft, see the "gravity misread as touch" note below) as its own
+    // effect, with shape `aura` and trigger `on_command` — neither `sphere` nor `continuous`, so
+    // this can't also satisfy the more specific `floating_city` recipe. A plain matching diagram
+    // produces "Gravity Well" end-to-end through `test_design`/`evaluate`, not just at the
+    // `interpret_diagram` layer.
+    let data = data();
+    let mut session = unlocked_session(&data);
+    session.player.workshop_rank = 4;
+    let commission = data
+        .commissions
+        .iter()
+        .find(|commission| commission.id == "floating_stage")
+        .unwrap()
+        .clone();
+    session.player.current_commission = data
+        .commissions
+        .iter()
+        .position(|c| c.id == commission.id)
+        .unwrap();
+    session.board.drawing_strokes = circled_order(&commission);
+
+    session.interpret_drawing(&data).unwrap();
+    let report = session.test_design(&data);
+
+    assert!(report.result.matched_request, "{:?}", report.result);
+    assert!(
+        report.result.title.contains("Gravity Well"),
+        "{:?}",
+        report.result
+    );
+}
+
+#[test]
+fn sandbox_mode_accepts_a_weak_circle_commission_mode_rejects() {
+    // Plan Phase 5 item 1 exit criterion: the same weak circle (quality ~0.30 — below
+    // Commission's 0.32 floor but above Sandbox's 0.24 one) is rejected in ordinary commission
+    // work and accepted in Sandbox, with no change to the recognizer itself — only which
+    // acceptance band `interpret_drawing` reads with (`GameSession::recognition_context`).
+    let data = data();
+    let strokes = weak_partial_circle();
+
+    let mut commission = unlocked_session(&data);
+    commission.board.drawing_strokes = strokes.clone();
+    let _ = commission.interpret_drawing(&data); // expected to Err: circle too weak to accept
+    assert!(
+        !commission
+            .board
+            .last_diagram
+            .as_ref()
+            .unwrap()
+            .circle_found,
+        "{:?}",
+        commission.board.last_diagram
+    );
+
+    let mut sandbox = unlocked_session(&data);
+    sandbox.set_sandbox_mode(true);
+    sandbox.board.drawing_strokes = strokes;
+    let _ = sandbox.interpret_drawing(&data); // still Err (no rune ink drawn), circle is what's under test
+    assert!(
+        sandbox.board.last_diagram.as_ref().unwrap().circle_found,
+        "{:?}",
+        sandbox.board.last_diagram
+    );
+}
+
+/// A circle whose quality (~0.30) sits between `Sandbox`'s 0.24 acceptance floor and
+/// `Commission`'s 0.32 one — an off-center, elongated, incomplete arc.
+fn weak_partial_circle() -> Vec<DrawnStroke> {
+    let mut points = Vec::new();
+    for index in 0..=28 {
+        let angle = std::f32::consts::TAU * 0.6 * index as f32 / 28.0;
+        points.push(StrokePoint::new(0.60 + 0.32 * angle.cos(), 0.60 + 0.16 * angle.sin()));
+    }
+    vec![DrawnStroke { points }]
 }

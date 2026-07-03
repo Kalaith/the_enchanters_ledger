@@ -3,11 +3,13 @@
 use macroquad_toolkit::assets::TextureConfig;
 use macroquad_toolkit::data_loader::{load_embedded_json, load_embedded_json_labeled};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 const GAME_CONFIG_JSON: &str = include_str!("../assets/data/game_config.json");
 const RUNES_JSON: &str = include_str!("../assets/data/runes.json");
 const COMMISSIONS_JSON: &str = include_str!("../assets/data/commissions.json");
 const TALISMAN_JOBS_JSON: &str = include_str!("../assets/data/talisman_jobs.json");
+const RECIPES_JSON: &str = include_str!("../assets/data/recipes.json");
 const TEXTURE_MANIFEST_JSON: &str = include_str!("../assets/data/texture_manifest.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +80,73 @@ pub struct RuneDef {
     pub safety: i32,
 }
 
+/// A named spell defined as a data predicate over a diagram's `rune_diagram::ScopeSpell` tree
+/// (plan Phase 4 item 3) — the replacement for hand-written `match` arms in
+/// `magical_circle::spell_name`. See `crate::recipes::match_recipe` for how `requires` is
+/// evaluated and `assets/data/recipes.json` for the actual roster.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeDef {
+    pub id: String,
+    pub name: String,
+    pub tier: u32,
+    pub requires: RecipeRequirements,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RecipeRequirements {
+    /// rune_id -> minimum total potency of that effect summed across the whole scope tree
+    /// (this scope plus every descendant sub-scope) — see `ScopeSpell::total_potency`.
+    #[serde(default)]
+    pub effect: HashMap<String, EffectRequirement>,
+    /// Checked against the root scope's own shape/trigger/modifier only — a diagram's overall
+    /// "shape" and "trigger" character is set by its outermost circle, not by what a sub-scope
+    /// vent happens to carry.
+    #[serde(default)]
+    pub shape: Option<String>,
+    #[serde(default)]
+    pub trigger: Option<String>,
+    #[serde(default)]
+    pub modifier: Option<String>,
+    /// Checked against the root scope's own structure-mark counts.
+    #[serde(default)]
+    pub structure: StructureRequirement,
+    /// Each entry requires at least `count` *direct* child scopes whose own effects include
+    /// `effect` — the mechanism for recipes like `volcano` that need several distinct vents.
+    #[serde(default)]
+    pub sub_scopes: Vec<SubScopeRequirement>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EffectRequirement {
+    #[serde(default)]
+    pub min_potency: f32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StructureRequirement {
+    #[serde(default)]
+    pub rings: usize,
+    #[serde(default)]
+    pub satellites: usize,
+    #[serde(default)]
+    pub radials: usize,
+    #[serde(default)]
+    pub perimeter: usize,
+    #[serde(default)]
+    pub scripts: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubScopeRequirement {
+    pub effect: String,
+    #[serde(default = "one")]
+    pub count: usize,
+}
+
+fn one() -> usize {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommissionDef {
     pub id: String,
@@ -101,6 +170,7 @@ pub struct GameData {
     pub runes: Vec<RuneDef>,
     pub commissions: Vec<CommissionDef>,
     pub talisman_jobs: Vec<CommissionDef>,
+    pub recipes: Vec<RecipeDef>,
     pub texture_manifest: Vec<TextureConfig>,
 }
 
@@ -110,6 +180,7 @@ impl GameData {
         let runes = load_embedded_json_labeled("runes", RUNES_JSON)?;
         let commissions = load_embedded_json_labeled("commissions", COMMISSIONS_JSON)?;
         let talisman_jobs = load_embedded_json_labeled("talisman_jobs", TALISMAN_JOBS_JSON)?;
+        let recipes = load_embedded_json_labeled("recipes", RECIPES_JSON)?;
         let texture_manifest = load_embedded_json(TEXTURE_MANIFEST_JSON)?;
 
         Ok(Self {
@@ -117,6 +188,7 @@ impl GameData {
             runes,
             commissions,
             talisman_jobs,
+            recipes,
             texture_manifest,
         })
     }

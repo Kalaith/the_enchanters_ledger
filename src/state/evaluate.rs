@@ -3,6 +3,8 @@ use super::{
     EnchantResult, GameSession, WorkOrderKind, DISCOVERY_INSIGHT,
 };
 use crate::data::{GameData, RuneCategory, RuneDef};
+use crate::recipes::match_recipe;
+use crate::rune_diagram::ScopeSpell;
 use std::collections::{HashMap, HashSet};
 
 impl GameSession {
@@ -138,14 +140,21 @@ impl GameSession {
         }
 
         let required = [
-            commission.required_effect.as_str(),
-            commission.required_shape.as_str(),
-            commission.required_trigger.as_str(),
+            ("effect", commission.required_effect.as_str()),
+            ("shape", commission.required_shape.as_str()),
+            ("trigger", commission.required_trigger.as_str()),
         ];
         let required_hits = required
             .iter()
-            .filter(|id| placed.iter().any(|placed| placed.rune.id == **id))
+            .filter(|(_, id)| placed.iter().any(|placed| placed.rune.id == *id))
             .count();
+        // First missing piece, by category — feeds `text::backfire_cause` (plan Phase 4 item 4)
+        // a specific "which rule was broken" instead of the generic "misses part of the
+        // request" message every unmatched commission used to get.
+        let missing_requirement = required
+            .iter()
+            .find(|(_, id)| !placed.iter().any(|placed| placed.rune.id == *id))
+            .map(|(kind, id)| (*kind, *id));
         let optional_hit = commission
             .optional_modifier
             .as_ref()
@@ -157,7 +166,10 @@ impl GameSession {
         ]
         .iter()
         .all(|category| by_category.contains_key(category));
-        let matched_request = required_hits == required.len();
+        // Sandbox (plan Phase 5 item 1) is free experimentation, not commissioned work — there
+        // is no specific request to match, so `evaluate()`'s request-matching gate is trivially
+        // satisfied rather than forcing every sandbox diagram to `Failed`.
+        let matched_request = self.sandbox_mode || required_hits == required.len();
         let average_quality = if placed.is_empty() {
             0.0
         } else {
@@ -174,6 +186,16 @@ impl GameSession {
             .last_diagram
             .as_ref()
             .and_then(|diagram| diagram.spell.as_ref());
+        let scope_spell = self
+            .board
+            .last_diagram
+            .as_ref()
+            .and_then(|diagram| diagram.scope_spell.as_ref());
+        // Recipes as data (plan Phase 4 item 3): the best-matching named spell, evaluated as a
+        // predicate over the scope tree — see `crate::recipes::match_recipe` and
+        // `assets/data/recipes.json`. Takes priority over `circle_spell`'s generic tier-based
+        // name (§5.7 of prd.md) when present.
+        let matched_recipe = scope_spell.and_then(|tree| match_recipe(tree, &data.recipes));
 
         // Magnitude channel (plan Phase 2): potency scales power and mana
         // cost per rune, on top of (not folded into) quality's existing
@@ -234,16 +256,13 @@ impl GameSession {
         safety += ((circle_quality - 0.55) * 14.0).round() as i32;
         score += ((circle_quality - 0.55) * 10.0).round() as i32;
 
-        // Containment budget (plan Phase 2 item 3, sets up Phase 4's full
-        // rule): total potency drawn must be covered by what the circle —
-        // and, once present, its ring/perimeter structure — can contain.
-        // Exceeding it costs stability, predictably and inspectably,
-        // rather than randomly.
-        let total_potency = placed.iter().map(|placed| placed.potency).sum::<f32>();
-        let containment_capacity =
-            2.0 + circle_quality * 6.0 + circle_spell.map_or(0.0, |spell| spell.containment * 4.0);
-        let potency_excess = (total_potency - containment_capacity).max(0.0);
-        stability -= (potency_excess * 10.0).round() as i32;
+        // Containment budget v2 (plan Phase 4 item 2): potency must be covered by *its own
+        // scope's* containment, not just a single whole-diagram total — a vent's fire potency is
+        // checked against that vent's own rings/perimeter/safer-rune containment, separately
+        // from the root circle's. `total_potency_excess` walks the whole scope tree; still a
+        // first cut (see prd.md), not a fully balanced version.
+        let total_excess = scope_spell.map_or(0.0, |tree| total_potency_excess(tree, circle_quality));
+        stability -= (total_excess * 10.0).round() as i32;
 
         if let Some(spell) = circle_spell {
             power += spell.power_bonus;
@@ -292,30 +311,50 @@ impl GameSession {
 
         let base_title = text::result_title(data, commission, &by_category, grade);
         let title = if grade != EnchantGrade::Failed {
-            circle_spell
-                .filter(|spell| spell.tier_rank >= 3)
-                .map(|spell| spell.name.clone())
+            // Recipes as data (item 3) take priority over `circle_spell`'s generic tier-based
+            // name — a matched recipe is always more specific than "grand enough to get a name".
+            matched_recipe
+                .map(|recipe| recipe.name.clone())
+                .or_else(|| {
+                    circle_spell
+                        .filter(|spell| spell.tier_rank >= 3)
+                        .map(|spell| spell.name.clone())
+                })
                 .unwrap_or(base_title)
         } else {
             base_title
         };
-        let mut side_effect = text::side_effect(
+
+        let duplicate_effect_count = by_category
+            .get(&RuneCategory::Effect)
+            .map_or(0, |runes| runes.len().saturating_sub(1));
+        let side_effect = text::backfire_cause(
             data,
-            commission,
-            grade,
-            matched_request,
             accident,
-            average_quality,
-            weak_marks,
-        );
-        if matched_request && !accident && grade != EnchantGrade::Failed {
-            if let Some(spell) = circle_spell {
-                side_effect = format!(
-                    "{} The {} flares through {} ring(s) and {} satellite seal(s).",
-                    side_effect, spell.name, spell.ring_count, spell.satellite_count
-                );
+            missing_requirement,
+            total_excess,
+            duplicate_effect_count,
+        )
+        .unwrap_or_else(|| {
+            let mut generic = text::side_effect(
+                data,
+                commission,
+                grade,
+                matched_request,
+                accident,
+                average_quality,
+                weak_marks,
+            );
+            if matched_request && !accident && grade != EnchantGrade::Failed {
+                if let Some(spell) = circle_spell {
+                    generic = format!(
+                        "{} The {} flares through {} ring(s) and {} satellite seal(s).",
+                        generic, spell.name, spell.ring_count, spell.satellite_count
+                    );
+                }
             }
-        }
+            generic
+        });
 
         EnchantResult {
             title,
@@ -425,6 +464,19 @@ impl GameSession {
     }
 
     fn signature(&self, data: &GameData) -> Option<String> {
+        // A matched recipe (plan Phase 4 item 3) is a stable, semantic key — every "volcano" is
+        // the same discovery regardless of minor potency/quality drift — so it takes priority
+        // over the sorted-name-bag fallback below, which stays for arbitrary/unnamed combos.
+        if let Some(recipe) = self
+            .board
+            .last_diagram
+            .as_ref()
+            .and_then(|diagram| diagram.scope_spell.as_ref())
+            .and_then(|tree| match_recipe(tree, &data.recipes))
+        {
+            return Some(recipe.id.clone());
+        }
+
         let mut pieces = Vec::new();
         for category in RuneCategory::ALL {
             let mut names: Vec<&str> = self
@@ -476,4 +528,30 @@ fn category_rank(category: RuneCategory) -> u8 {
         RuneCategory::Trigger => 2,
         RuneCategory::Modifier => 3,
     }
+}
+
+/// Total stability-costing potency excess across the whole scope tree (plan Phase 4 item 2,
+/// containment budget v2): the root scope's capacity mirrors Phase 2's original whole-circle
+/// formula (baseline + drawn circle quality + structural containment); every sub-scope instead
+/// gets its own, smaller budget from *its own* local structure/safer-rune containment only — a
+/// vent's fire potency has to be covered by that vent's own rings and wards, not borrowed from
+/// the crater's. Never negative: a scope with more containment than potency contributes nothing,
+/// not a stability bonus.
+fn total_potency_excess(tree: &ScopeSpell, circle_quality: f32) -> f32 {
+    fn excess_at(tree: &ScopeSpell, circle_quality: f32, is_root: bool) -> f32 {
+        let local_potency = tree.effects.iter().map(|(_, potency)| potency).sum::<f32>();
+        let local_capacity = if is_root {
+            2.0 + circle_quality * 6.0 + tree.containment * 4.0
+        } else {
+            1.0 + tree.containment * 3.0
+        };
+        let own_excess = (local_potency - local_capacity).max(0.0);
+        own_excess
+            + tree
+                .sub_scopes
+                .iter()
+                .map(|sub| excess_at(sub, circle_quality, false))
+                .sum::<f32>()
+    }
+    excess_at(tree, circle_quality, true)
 }

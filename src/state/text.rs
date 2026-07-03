@@ -37,6 +37,46 @@ pub(super) fn result_title(
     }
 }
 
+/// A cause-specific backfire message (plan Phase 4 item 4): "failures teach the grammar" — when
+/// something concrete and nameable went wrong (uncontained potency, a specific missing
+/// requirement, conflicting duplicate effects), say so instead of the generic grade-based
+/// message `side_effect` falls back to. Priority: an accident already gets its own message from
+/// `side_effect` (returns `None` here so callers fall through to it, avoiding a double message);
+/// then uncontained potency; then a specifically-named missing requirement; then duplicate
+/// effects. Returns `None` when none of these apply, so callers should fall back to `side_effect`.
+pub(super) fn backfire_cause(
+    data: &GameData,
+    accident: bool,
+    missing_requirement: Option<(&str, &str)>,
+    potency_excess: f32,
+    duplicate_effect_count: usize,
+) -> Option<String> {
+    if accident {
+        return None;
+    }
+    if potency_excess > 0.5 {
+        return Some(format!(
+            "The working circle can't hold everything drawn — about {:.1} potency worth of \
+             effect spills past the rings and wards, and the margins hiss with the overflow.",
+            potency_excess
+        ));
+    }
+    if let Some((kind, rune_id)) = missing_requirement {
+        return Some(format!(
+            "The diagram never drew a {kind} — the commission calls for {}.",
+            data.rune_name(rune_id)
+        ));
+    }
+    if duplicate_effect_count > 0 {
+        return Some(
+            "Two effect runes compete for the same working circle, and their conflicting pulls \
+             bleed mana into waste."
+                .to_owned(),
+        );
+    }
+    None
+}
+
 pub(super) fn side_effect(
     data: &GameData,
     commission: &CommissionDef,

@@ -326,6 +326,64 @@ fn canonicalize_stroke_converges_regardless_of_capture_density() {
 }
 
 #[test]
+fn acceptance_bands_are_ordered_practice_strictest_sandbox_most_lenient() {
+    // Plan Phase 5 item 1: "Practice strict, commissions moderate, sandbox lenient."
+    let practice = acceptance_band(RecognitionContext::Practice);
+    let commission = acceptance_band(RecognitionContext::Commission);
+    let sandbox = acceptance_band(RecognitionContext::Sandbox);
+
+    assert!(practice.confidence > commission.confidence, "{practice:?} vs {commission:?}");
+    assert!(commission.confidence > sandbox.confidence, "{commission:?} vs {sandbox:?}");
+    assert!(practice.margin > commission.margin);
+    assert!(commission.margin > sandbox.margin);
+    assert!(practice.ambiguous_confidence > commission.ambiguous_confidence);
+    assert!(commission.ambiguous_confidence > sandbox.ambiguous_confidence);
+
+    // Commission is bit-identical to the pre-Phase-5 hardcoded constants — no behavior change
+    // for any existing caller of the context-free `recognize_rune`.
+    assert_eq!(commission.confidence, MIN_RECOGNITION_CONFIDENCE);
+    assert_eq!(commission.margin, MIN_RECOGNITION_MARGIN);
+}
+
+#[test]
+fn context_changes_acceptance_cutoffs_never_the_underlying_score() {
+    // "One recognizer... thresholds differ, behavior never does" — the same drawing must score
+    // identically (same winning rune, same confidence/quality) in every context; only whether
+    // that score clears the line differs.
+    let data = crate::data::GameData::load().unwrap();
+    let strokes = samples::circled_sample(&samples::ambiguous_shape_samples()[0], 0.5, 0.5, 0.20);
+    let strokes = strokes
+        .into_iter()
+        .skip(1) // drop the outer circle, this test only cares about the inner rune's own score
+        .collect::<Vec<_>>();
+
+    let commission =
+        recognize_rune_in_context(&strokes, data.runes.iter(), RecognitionContext::Commission)
+            .unwrap();
+    let practice =
+        recognize_rune_in_context(&strokes, data.runes.iter(), RecognitionContext::Practice)
+            .unwrap();
+    let sandbox =
+        recognize_rune_in_context(&strokes, data.runes.iter(), RecognitionContext::Sandbox)
+            .unwrap();
+
+    assert_eq!(commission.rune_id, practice.rune_id);
+    assert_eq!(commission.rune_id, sandbox.rune_id);
+    assert!(
+        (commission.confidence - practice.confidence).abs() < 1e-5,
+        "{commission:?} vs {practice:?}"
+    );
+    assert!(
+        (commission.confidence - sandbox.confidence).abs() < 1e-5,
+        "{commission:?} vs {sandbox:?}"
+    );
+    assert!(
+        (commission.quality - practice.quality).abs() < 1e-5,
+        "{commission:?} vs {practice:?}"
+    );
+}
+
+#[test]
 fn eraser_splits_a_stroke_without_clearing_the_whole_mark() {
     let mut strokes = raw(&[&[(0.12, 0.50), (0.88, 0.50)]]);
 

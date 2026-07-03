@@ -423,6 +423,74 @@ fn small_rune_grid(rune_id: &str, count_target: usize, spacing: f32, scale: f32)
 }
 
 #[test]
+fn fireball_recipe_recognized_purely_from_data() {
+    // Plan Phase 4 exit criterion: "fireball ... defined purely in data" — one scope, no
+    // sub-scopes, matched against `assets/data/recipes.json` with no rune-id-specific Rust
+    // involved in the naming decision.
+    let data = GameData::load().unwrap();
+    let mut strokes = outer_circle();
+    strokes.extend(template_at("fire", 0.50, 0.30, 0.20));
+    strokes.extend(template_at("sphere", 0.28, 0.62, 0.18));
+    strokes.extend(template_at("on_command", 0.72, 0.62, 0.16));
+
+    let interpretation = interpret_diagram(&strokes, all_runes(&data));
+    assert!(interpretation.accepted(), "{interpretation:?}");
+    let tree = interpretation.scope_spell.as_ref().expect("scope_spell");
+    let matched = crate::recipes::match_recipe(tree, &data.recipes)
+        .unwrap_or_else(|| panic!("no recipe matched: tree={tree:?} runes={:?}", interpretation.runes));
+
+    assert_eq!(matched.id, "fireball", "{tree:?}");
+}
+
+#[test]
+fn volcano_recipe_recognized_purely_from_data() {
+    // Plan Phase 4 exit criterion: "volcano ... defined purely in data" — a root scope
+    // (fire + cone + continuous + rings + satellites) enclosing two off-center vent sub-scopes
+    // (each its own force + fire), matched against `assets/data/recipes.json` with no
+    // rune-id-specific Rust involved. Also exercises `ScopeSpell::total_potency` summing across
+    // the tree, since `volcano`'s `min_potency` is only reached by root + vent fire combined.
+    let data = GameData::load().unwrap();
+    let strokes = volcano_diagram();
+
+    let interpretation = interpret_diagram(&strokes, all_runes(&data));
+    assert!(interpretation.accepted(), "{interpretation:?}");
+    let tree = interpretation.scope_spell.as_ref().expect("scope_spell");
+    assert_eq!(tree.sub_scopes.len(), 2, "{tree:?} runes={:?}", interpretation.runes);
+
+    let matched = crate::recipes::match_recipe(tree, &data.recipes)
+        .unwrap_or_else(|| panic!("no recipe matched: tree={tree:?} runes={:?}", interpretation.runes));
+    assert_eq!(matched.id, "volcano", "{tree:?}");
+}
+
+fn volcano_diagram() -> Vec<DrawnStroke> {
+    let mut strokes = outer_circle();
+    strokes.extend(template_at("fire", 0.50, 0.24, 0.28));
+    strokes.extend(template_at("continuous", 0.18, 0.50, 0.16));
+    strokes.extend(template_at("cone", 0.50, 0.86, 0.16));
+    // Concentric reinforcement rings, near the center — proven safe from being reinterpreted
+    // as their own sub-scopes (orbit ~0, below `NESTED_RING_MIN_ORBIT`).
+    strokes.extend(rough_circle(0.50, 0.50, 0.14, 0.133, 32));
+    strokes.extend(rough_circle(0.50, 0.50, 0.125, 0.119, 28));
+    // 3 satellite seals, clustered on the right so they stay clear of the rings (orbit floor)
+    // and the two vents (below).
+    strokes.extend(rough_circle(0.74, 0.50, 0.045, 0.0414, 16));
+    strokes.extend(rough_circle(0.7175, 0.6015, 0.045, 0.0414, 16));
+    strokes.extend(rough_circle(0.7175, 0.3985, 0.045, 0.0414, 16));
+    strokes.extend(vent(0.22, 0.78));
+    strokes.extend(vent(0.78, 0.78));
+    strokes
+}
+
+/// One volcano vent: a ring enclosing its own `force` and `fire` runes, offset from each other
+/// so they stay separate clusters.
+fn vent(cx: f32, cy: f32) -> Vec<DrawnStroke> {
+    let mut strokes = rough_circle(cx, cy, 0.125, 0.119, 32);
+    strokes.extend(template_at("force", cx - 0.07, cy, 0.17));
+    strokes.extend(template_at("fire", cx + 0.07, cy, 0.17));
+    strokes
+}
+
+#[test]
 fn rune_far_below_old_twelve_percent_scale_floor_still_reads() {
     // Phase 3 item 4 exit criterion (C1/C2): a rune drawn at ~4% of the working circle's scale
     // — well under the old, now-removed `MIN_RUNE_SCALE_IN_CIRCLE` (0.12) floor — must still be

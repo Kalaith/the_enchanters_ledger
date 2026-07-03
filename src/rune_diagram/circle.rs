@@ -1,5 +1,4 @@
 use super::geometry::{distance, StrokeBounds};
-use super::MIN_CIRCLE_QUALITY;
 use crate::rune_drawing::{DrawnStroke, StrokePoint};
 
 /// A candidate working circle: the (one or more, see `assemble_multi_stroke_circles`) original
@@ -143,10 +142,13 @@ fn points_span(points: &[StrokePoint]) -> f32 {
     (max_x - min_x).max(max_y - min_y)
 }
 
-pub(crate) fn select_working_circle(candidates: &[CircleCandidate]) -> Option<CircleCandidate> {
+pub(crate) fn select_working_circle(
+    candidates: &[CircleCandidate],
+    min_circle_quality: f32,
+) -> Option<CircleCandidate> {
     candidates
         .iter()
-        .filter(|(_, quality, _)| *quality >= MIN_CIRCLE_QUALITY)
+        .filter(|(_, quality, _)| *quality >= min_circle_quality)
         .max_by(|a, b| {
             let a_span = a.2.width().max(a.2.height());
             let b_span = b.2.width().max(b.2.height());
@@ -170,14 +172,15 @@ pub(crate) fn select_working_circle(candidates: &[CircleCandidate]) -> Option<Ci
 pub(crate) fn select_working_circle_for_strokes(
     candidates: &[CircleCandidate],
     useful: &[(usize, &DrawnStroke)],
+    min_circle_quality: f32,
 ) -> Option<CircleCandidate> {
     let contextual = candidates
         .iter()
         .map(|candidate| (candidate.clone(), enclosed_ink_count(candidate, useful)))
         .filter(|(_, enclosed)| *enclosed > 0)
         .max_by(|(a, a_enclosed), (b, b_enclosed)| {
-            let a_valid = (a.1 >= MIN_CIRCLE_QUALITY) as u8;
-            let b_valid = (b.1 >= MIN_CIRCLE_QUALITY) as u8;
+            let a_valid = (a.1 >= min_circle_quality) as u8;
+            let b_valid = (b.1 >= min_circle_quality) as u8;
             let a_span = a.2.width().max(a.2.height());
             let b_span = b.2.width().max(b.2.height());
             a_valid
@@ -189,7 +192,7 @@ pub(crate) fn select_working_circle_for_strokes(
         })
         .map(|(candidate, _)| candidate);
 
-    contextual.or_else(|| select_working_circle(candidates))
+    contextual.or_else(|| select_working_circle(candidates, min_circle_quality))
 }
 
 /// Deterministic tie-break: highest member stroke index wins, matching the old single-stroke

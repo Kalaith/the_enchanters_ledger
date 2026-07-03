@@ -21,6 +21,54 @@ pub const MIN_RECOGNITION_CONFIDENCE: f32 = 0.32;
 pub const MIN_RECOGNITION_MARGIN: f32 = 0.04;
 const AMBIGUOUS_ACCEPTANCE_CONFIDENCE: f32 = 0.58;
 
+/// Where a drawing is being read (plan Phase 5 item 1): the recognizer and its scoring math
+/// (confidence/quality values) are identical in every context — only the *acceptance* cutoff
+/// differs, via `acceptance_band`. "One recognizer, per-context acceptance bands... thresholds
+/// differ, behavior never does" — no separate "easy recognizer" exists anywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecognitionContext {
+    /// The Practice slate — deliberately the *strictest* band, since practice is where correct
+    /// technique is taught; a mark that would pass in commission work here still gets flagged
+    /// so the player learns to draw it cleanly.
+    Practice,
+    /// The ordinary commission/talisman work slate — today's exact constants, unchanged.
+    Commission,
+    /// Free experimentation (`WorkOrderKind::Sandbox`) — deliberately the most forgiving band,
+    /// so large exploratory diagrams aren't punished by the same precision commissions expect.
+    Sandbox,
+}
+
+/// A context's acceptance cutoffs — every field here maps 1:1 to a threshold `recognize_rune`
+/// already computed against a bare constant; `RecognitionContext::Commission`'s values are
+/// bit-identical to the pre-Phase-5 hardcoded constants, so existing callers (`recognize_rune`)
+/// see zero behavior change.
+#[derive(Debug, Clone, Copy)]
+pub struct AcceptanceBand {
+    pub confidence: f32,
+    pub margin: f32,
+    pub ambiguous_confidence: f32,
+}
+
+pub fn acceptance_band(context: RecognitionContext) -> AcceptanceBand {
+    match context {
+        RecognitionContext::Practice => AcceptanceBand {
+            confidence: 0.40,
+            margin: 0.05,
+            ambiguous_confidence: 0.64,
+        },
+        RecognitionContext::Commission => AcceptanceBand {
+            confidence: MIN_RECOGNITION_CONFIDENCE,
+            margin: MIN_RECOGNITION_MARGIN,
+            ambiguous_confidence: AMBIGUOUS_ACCEPTANCE_CONFIDENCE,
+        },
+        RecognitionContext::Sandbox => AcceptanceBand {
+            confidence: 0.24,
+            margin: 0.03,
+            ambiguous_confidence: 0.50,
+        },
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct StrokePoint {
     pub x: f32,
@@ -143,10 +191,26 @@ fn default_ink_ratio() -> f32 {
     1.0
 }
 
+/// Recognizes `strokes` against `runes` using the `Commission` acceptance band — bit-identical
+/// to this function's pre-Phase-5 behavior (the scoring math never depended on context; only
+/// this band selection is new). See `recognize_rune_in_context` for Practice/Sandbox.
 pub fn recognize_rune<'a>(
     strokes: &[DrawnStroke],
     runes: impl IntoIterator<Item = &'a RuneDef>,
 ) -> Option<RecognitionOutcome> {
+    recognize_rune_in_context(strokes, runes, RecognitionContext::Commission)
+}
+
+/// Recognizes `strokes` against `runes`, accepting/rejecting per `context`'s `AcceptanceBand`
+/// (plan Phase 5 item 1). Every score (confidence, quality, alternatives) is computed exactly
+/// as `recognize_rune` always has — `context` only changes where the `accepted`/`ambiguous`
+/// cutoffs fall.
+pub fn recognize_rune_in_context<'a>(
+    strokes: &[DrawnStroke],
+    runes: impl IntoIterator<Item = &'a RuneDef>,
+    context: RecognitionContext,
+) -> Option<RecognitionOutcome> {
+    let band = acceptance_band(context);
     let strokes = merge_continuation_strokes(strokes);
     let candidate = NormalizedDrawing::from_strokes(&strokes)?;
     let mut scores = runes
@@ -189,19 +253,19 @@ pub fn recognize_rune<'a>(
             raw_confidence - candidate.confidence
         })
         .max(0.0);
-    let ambiguous = score_gap < MIN_RECOGNITION_MARGIN;
+    let ambiguous = score_gap < band.margin;
     // Fade the ambiguity penalty in smoothly as the margin narrows, instead
     // of snapping a fixed ×0.92/×0.96 on the instant score_gap dips below
-    // MIN_RECOGNITION_MARGIN — a 1-pixel wiggle that nudges the gap from
+    // the band's margin — a 1-pixel wiggle that nudges the gap from
     // just above to just below the line should not visibly jump the
-    // readout. Full penalty at gap=0, none at gap>=MIN_RECOGNITION_MARGIN,
+    // readout. Full penalty at gap=0, none at gap>=band.margin,
     // matching the old step's endpoints exactly.
-    let margin_relief = (score_gap / MIN_RECOGNITION_MARGIN).clamp(0.0, 1.0);
+    let margin_relief = (score_gap / band.margin).clamp(0.0, 1.0);
     confidence *= 1.0 - (1.0 - margin_relief) * 0.08;
     quality *= 1.0 - (1.0 - margin_relief) * 0.04;
     quality = quality.clamp(0.0, 1.0);
-    let accepted = confidence >= MIN_RECOGNITION_CONFIDENCE
-        && (!ambiguous || confidence >= AMBIGUOUS_ACCEPTANCE_CONFIDENCE);
+    let accepted =
+        confidence >= band.confidence && (!ambiguous || confidence >= band.ambiguous_confidence);
     let ink_ratio = template_variants_for_rune(&rune_id)
         .into_iter()
         .filter_map(|template| NormalizedDrawing::from_strokes(&template))
@@ -434,7 +498,7 @@ fn densify_points(points: &[StrokePoint], max_gap: f32) -> Vec<StrokePoint> {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod confusion_gate;
 #[cfg(test)]

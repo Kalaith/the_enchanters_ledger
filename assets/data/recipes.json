@@ -1,0 +1,66 @@
+[
+  {
+    "id": "gravity_well",
+    "name": "Gravity Well",
+    "tier": 1,
+    "requires": {
+      "effect": { "gravity": {} }
+    }
+  },
+  {
+    "id": "floating_city",
+    "name": "Aegis of the Floating City",
+    "tier": 4,
+    "requires": {
+      "effect": { "gravity": {} },
+      "shape": "sphere",
+      "trigger": "continuous"
+    }
+  },
+  {
+    "id": "wayfold_gate",
+    "name": "Wayfold Gate",
+    "tier": 1,
+    "requires": {
+      "effect": { "teleportation": {} }
+    }
+  },
+  {
+    "id": "threshold_calling",
+    "name": "Threshold Calling",
+    "tier": 1,
+    "requires": {
+      "effect": { "summoning": {} }
+    }
+  },
+  {
+    "id": "chronal_ledger",
+    "name": "Chronal Ledger",
+    "tier": 1,
+    "requires": {
+      "effect": { "time": {} }
+    }
+  },
+  {
+    "id": "fireball",
+    "name": "Fireball",
+    "tier": 1,
+    "requires": {
+      "effect": { "fire": {} },
+      "shape": "sphere",
+      "trigger": "on_command"
+    }
+  },
+  {
+    "id": "volcano",
+    "name": "Grand Caldera",
+    "tier": 4,
+    "requires": {
+      "effect": { "fire": { "min_potency": 3.0 } },
+      "shape": "cone",
+      "trigger": "continuous",
+      "structure": { "rings": 2, "satellites": 3 },
+      "sub_scopes": [{ "effect": "force", "count": 2 }]
+    }
+  }
+]

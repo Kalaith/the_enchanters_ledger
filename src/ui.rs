@@ -106,6 +106,7 @@ pub enum UiAction {
     RemoveRuneTemplate(usize),
     MoveRuneTemplate(usize, StrokePoint),
     ToggleGuideEditMode,
+    ToggleSandboxMode,
     StartRuneStroke(StrokePoint),
     ExtendRuneStroke(StrokePoint),
     FinishRuneStroke,

@@ -7,6 +7,7 @@ mod corpus;
 mod data;
 mod game;
 mod magical_circle;
+mod recipes;
 mod rune_diagnostics;
 mod rune_diagram;
 mod rune_drawing;

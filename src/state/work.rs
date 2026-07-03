@@ -3,6 +3,11 @@ use crate::data::{CommissionDef, GameData};
 use serde::{Deserialize, Serialize};
 
 pub const DISCOVERY_INSIGHT: i64 = 2;
+/// Plan Phase 5 item 2: a small reward for reading a diagram with no guide templates armed at
+/// all — the mastery system's other half (`RuneMastery`, `ui/drawing.rs`'s fading opacity)
+/// nudges guides out of the picture gradually; this is the moment that pays off going the rest
+/// of the way guide-free.
+pub const GUIDE_FREE_INSIGHT: i64 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]

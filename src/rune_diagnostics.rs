@@ -96,7 +96,7 @@ pub fn diagnose_diagram<'a>(
     }
 
     let Some((circle_member_indices, circle_score, circle_bounds)) =
-        select_working_circle_for_strokes(&circle_candidates, &useful)
+        select_working_circle_for_strokes(&circle_candidates, &useful, MIN_CIRCLE_QUALITY)
     else {
         writeln!(log, "\nselected circle: none").ok();
         write_stroke_guesses(&mut log, &useful, &available_runes);
@@ -198,6 +198,120 @@ pub fn diagnose_diagram<'a>(
 
     write_final_interpretation(&mut log, strokes, &available_runes);
     log
+}
+
+/// One templated sentence for the single most relevant issue in `strokes` (plan Phase 5 item 3)
+/// — a player-facing sibling to `diagnose_diagram`'s verbose dev log, built from the exact same
+/// typed calls (`gather_circle_candidates`, `select_working_circle_for_strokes`,
+/// `classify_circle_stroke`, `cluster_strokes`, `recognize_rune`) instead of duplicating any
+/// recognition logic. Priority, most fundamental problem first: no circle → circle too weak →
+/// the most ambiguous rune cluster → a rune-sized mark that read as circle structure instead →
+/// a generic "reads, but soft" note when everything above is clean but quality is still low.
+/// Returns `None` when there's nothing worth flagging.
+pub fn player_hint<'a>(
+    strokes: &[DrawnStroke],
+    runes: impl IntoIterator<Item = &'a RuneDef>,
+) -> Option<String> {
+    let available_runes = runes.into_iter().collect::<Vec<_>>();
+    let useful = strokes
+        .iter()
+        .enumerate()
+        .filter(|(_, stroke)| stroke.has_ink())
+        .collect::<Vec<_>>();
+    if useful.is_empty() {
+        return None;
+    }
+
+    let circle_candidates = gather_circle_candidates(&useful);
+    let Some((circle_member_indices, circle_score, circle_bounds)) =
+        select_working_circle_for_strokes(&circle_candidates, &useful, 0.0)
+    else {
+        return Some(
+            "No closed shape reads as a circle yet — draw one continuous loop around your runes."
+                .to_owned(),
+        );
+    };
+    if circle_score < MIN_CIRCLE_QUALITY {
+        return Some(format!(
+            "The circle only reads at {} — close the loop where it started and keep the curve \
+             even.",
+            pct(circle_score)
+        ));
+    }
+
+    let spell_bounds = CircleBounds::new(
+        circle_bounds.min_x,
+        circle_bounds.min_y,
+        circle_bounds.max_x,
+        circle_bounds.max_y,
+    );
+    let classified_marks = useful
+        .iter()
+        .filter(|(index, _)| !circle_member_indices.contains(index))
+        .filter_map(|(index, stroke)| {
+            classify_circle_stroke(stroke, spell_bounds).map(|mark| (*index, mark))
+        })
+        .collect::<Vec<_>>();
+
+    let inner_strokes = useful
+        .iter()
+        .filter(|(index, stroke)| {
+            !circle_member_indices.contains(index)
+                && is_inside_working_circle(stroke, circle_bounds)
+                && !is_circle_structure(*index, &classified_marks)
+        })
+        .map(|(index, stroke)| (*index, (*stroke).clone()))
+        .collect::<Vec<_>>();
+    let clusters = cluster_strokes(&inner_strokes);
+
+    // Worst-ambiguity cluster: the accepted-but-close-to-a-rival, or rejected-but-close, read.
+    let worst_ambiguity = clusters
+        .iter()
+        .filter_map(|cluster| {
+            let guess = recognize_rune(&cluster.strokes, available_runes.iter().copied())?;
+            let alt = guess.alternatives.first()?;
+            (guess.ambiguous || !guess.accepted).then_some((guess.rune_id, alt.rune_id.clone(), guess.score_gap))
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2));
+    if let Some((best, alt, gap)) = worst_ambiguity {
+        return Some(format!(
+            "One mark could be {best} or {alt} — only {} apart. Make the difference between \
+             them clearer.",
+            pct(gap)
+        ));
+    }
+
+    // A rune-sized stroke that got swept into circle structure (ring/satellite/perimeter/
+    // script) instead of staying candidate rune ink, per C1/C2's "small runes look like
+    // decoration" failure mode (prd.md §5.2).
+    let swallowed_as_structure = useful.iter().find(|(index, _)| {
+        !circle_member_indices.contains(index) && is_circle_structure(*index, &classified_marks)
+    });
+    if let Some((_, stroke)) = swallowed_as_structure {
+        if recognize_rune(
+            std::slice::from_ref(stroke),
+            available_runes.iter().copied(),
+        )
+        .is_some_and(|guess| guess.accepted)
+        {
+            return Some(
+                "A mark near the ring reads as decoration, not a rune — draw it larger or \
+                 farther from the other structure marks if it was meant to be a symbol."
+                    .to_owned(),
+            );
+        }
+    }
+
+    let final_read = interpret_diagram(strokes, available_runes.iter().copied());
+    if final_read.accepted() && final_read.average_rune_quality() < 0.68 {
+        return Some(
+            "The diagram reads, but precision is soft overall — check start points and stroke \
+             order against the guides."
+                .to_owned(),
+        );
+    }
+
+    None
 }
 
 fn write_final_interpretation(log: &mut String, strokes: &[DrawnStroke], runes: &[&RuneDef]) {
@@ -325,6 +439,52 @@ mod tests {
         assert!(log.contains("final interpretation"), "{log}");
         assert!(log.contains("light"), "{log}");
         assert!(log.contains("sphere"), "{log}");
+    }
+
+    #[test]
+    fn player_hint_flags_missing_circle() {
+        let data = GameData::load().unwrap();
+        let strokes = template_at("light", 0.50, 0.50, 0.20);
+
+        let hint = player_hint(&strokes, data.runes.iter().filter(|rune| rune.tier == 1));
+
+        assert!(hint.unwrap().contains("circle"), "expected a circle hint");
+    }
+
+    #[test]
+    fn player_hint_flags_a_weak_circle() {
+        let data = GameData::load().unwrap();
+        // Same weak partial-arc circle used to prove Sandbox is more lenient than Commission
+        // (`state::tests::sandbox_mode_accepts_a_weak_circle_commission_mode_rejects`) — quality
+        // ~0.30, below `MIN_CIRCLE_QUALITY` (0.32).
+        let mut points = Vec::new();
+        for index in 0..=28 {
+            let angle = std::f32::consts::TAU * 0.6 * index as f32 / 28.0;
+            points.push(StrokePoint::new(
+                0.60 + 0.32 * angle.cos(),
+                0.60 + 0.16 * angle.sin(),
+            ));
+        }
+        let strokes = vec![DrawnStroke { points }];
+
+        let hint = player_hint(&strokes, data.runes.iter());
+
+        assert!(
+            hint.as_deref().unwrap().contains("only reads at"),
+            "{hint:?}"
+        );
+    }
+
+    #[test]
+    fn player_hint_is_none_for_a_clean_diagram() {
+        let data = GameData::load().unwrap();
+        let mut strokes = outer_circle();
+        strokes.extend(template_at("light", 0.34, 0.32, 0.18));
+        strokes.extend(template_at("sphere", 0.50, 0.58, 0.18));
+
+        let hint = player_hint(&strokes, data.runes.iter().filter(|rune| rune.tier == 1));
+
+        assert_eq!(hint, None, "{hint:?}");
     }
 
     #[test]
