@@ -1042,6 +1042,138 @@ fn degraded_circled_order(order: &CommissionDef) -> Vec<DrawnStroke> {
     strokes
 }
 
+/// Layout for structure-demanding commissions: the proven degraded rune row
+/// (same spots/seeds as `degraded_circled_order`), reinforcement rings
+/// concentric at center, satellite seals clustered along the top, sub-scope
+/// vents in the bottom corners (volcano-fixture geometry). Runes are drawn
+/// with the same degraded hand as `degraded_circled_order`.
+fn degraded_structured_order(order: &CommissionDef) -> Vec<DrawnStroke> {
+    let mut strokes = degraded_circled_order(order);
+    for index in 0..order.required_structure.rings {
+        let radius = 0.13 + index as f32 * 0.014;
+        strokes.extend(rough_circle(0.50, 0.50, radius, radius * 0.95, 28));
+    }
+    let satellite_spots = [(0.42, 0.28), (0.53, 0.26), (0.64, 0.30)];
+    assert!(
+        order.required_structure.satellites <= satellite_spots.len(),
+        "add satellite spots for {}",
+        order.id
+    );
+    for spot in satellite_spots
+        .iter()
+        .take(order.required_structure.satellites)
+    {
+        strokes.extend(rough_circle(spot.0, spot.1, 0.045, 0.0414, 16));
+    }
+    strokes.extend(radial_spokes(order.required_structure.radials, 0.31));
+    strokes.extend(perimeter_ticks(order.required_structure.perimeter, 0.39, 0.016));
+    strokes.extend(script_marks(order.required_structure.scripts, 0.27, 0.008));
+    let vent_spots = [(0.24, 0.76), (0.76, 0.76)];
+    assert!(
+        order.required_sub_scopes <= vent_spots.len(),
+        "add vent spots for {}",
+        order.id
+    );
+    for (index, spot) in vent_spots
+        .iter()
+        .take(order.required_sub_scopes)
+        .enumerate()
+    {
+        strokes.extend(rough_circle(spot.0, spot.1, 0.125, 0.119, 32));
+        strokes.extend(jittered_template_at(
+            "force",
+            spot.0 - 0.07,
+            spot.1,
+            0.17,
+            44 + index as u64,
+        ));
+        strokes.extend(jittered_template_at(
+            "fire",
+            spot.0 + 0.07,
+            spot.1,
+            0.17,
+            55 + index as u64,
+        ));
+    }
+    strokes
+}
+
+#[test]
+fn mid_and_endgame_commissions_clear_with_degraded_hand_and_structure() {
+    // Plan Phase 5 item 4, mid/endgame legs: every commission past the early
+    // ones — including those demanding rings/satellites (mid-game structure
+    // marks) and sub-scope vents (endgame multi-scope work) — must be
+    // passable when drawn with the same degraded "average person" hand the
+    // early-commission pacing test uses.
+    let data = data();
+    let later = data
+        .commissions
+        .iter()
+        .filter(|commission| commission.difficulty >= 3)
+        .collect::<Vec<_>>();
+    assert!(!later.is_empty());
+
+    for commission in later {
+        let mut session = unlocked_session(&data);
+        session.player.workshop_rank = 4;
+        session.player.current_commission = data
+            .commissions
+            .iter()
+            .position(|candidate| candidate.id == commission.id)
+            .unwrap();
+        session.board.drawing_strokes = degraded_structured_order(commission);
+
+        session.interpret_drawing(&data).unwrap_or_else(|error| {
+            panic!(
+                "{} failed to interpret when drawn with jitter: {error}",
+                commission.id
+            )
+        });
+        let report = session.test_design(&data);
+        assert!(
+            report.result.matched_request,
+            "{} did not match its own requirements once jittered: {:?}",
+            commission.id, report.result
+        );
+        assert_ne!(
+            report.result.grade,
+            EnchantGrade::Failed,
+            "{} graded Failed once jittered: {:?}",
+            commission.id,
+            report.result
+        );
+    }
+}
+
+#[test]
+fn structure_requiring_commission_rejects_a_plain_rune_diagram() {
+    // The other half of the pacing gate: a commission that demands
+    // structural work must NOT accept the plain three-rune diagram that
+    // clears early commissions.
+    let data = data();
+    let commission = data
+        .commissions
+        .iter()
+        .find(|commission| commission.id == "city_shield")
+        .unwrap();
+    let mut session = unlocked_session(&data);
+    session.player.workshop_rank = 4;
+    session.player.current_commission = data
+        .commissions
+        .iter()
+        .position(|candidate| candidate.id == commission.id)
+        .unwrap();
+    session.board.drawing_strokes = degraded_circled_order(commission);
+
+    session.interpret_drawing(&data).unwrap();
+    let report = session.test_design(&data);
+    assert!(
+        !report.result.matched_request,
+        "city_shield accepted a diagram with none of its required structure: {:?}",
+        report.result
+    );
+}
+
 fn placed_ids(session: &GameSession) -> Vec<String> {
     session
         .board
@@ -1130,3 +1262,4 @@ fn weak_partial_circle() -> Vec<DrawnStroke> {
     }
     vec![DrawnStroke { points }]
 }
+

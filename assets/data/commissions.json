@@ -117,7 +117,10 @@
     "reward": 64,
     "reputation": 8,
     "insight": 10,
-    "risk": "Low"
+    "risk": "Low",
+    "required_structure": {
+      "rings": 2
+    }
   },
   {
     "id": "alarm_bell",
@@ -132,7 +135,10 @@
     "reward": 58,
     "reputation": 7,
     "insight": 10,
-    "risk": "Low"
+    "risk": "Low",
+    "required_structure": {
+      "rings": 2
+    }
   },
   {
     "id": "silent_gloves",
@@ -147,7 +153,11 @@
     "reward": 90,
     "reputation": -2,
     "insight": 12,
-    "risk": "Suspicious"
+    "risk": "Suspicious",
+    "required_structure": {
+      "rings": 2,
+      "satellites": 2
+    }
   },
   {
     "id": "floating_stage",
@@ -177,6 +187,30 @@
     "reward": 180,
     "reputation": 18,
     "insight": 20,
+    "risk": "Legendary",
+    "required_structure": {
+      "rings": 2,
+      "satellites": 3
+    }
+  },
+  {
+    "id": "ember_gardens",
+    "customer": "Guildmistress Ferrah",
+    "request": "The forge district wants a crowned ember fount: twin fire vents, each its own sealed circle, feeding one master diagram.",
+    "item": "forge crown sigil",
+    "required_effect": "fire",
+    "required_shape": "cone",
+    "required_trigger": "continuous",
+    "optional_modifier": "safer",
+    "required_structure": {
+      "rings": 2,
+      "satellites": 3
+    },
+    "required_sub_scopes": 2,
+    "difficulty": 7,
+    "reward": 200,
+    "reputation": 20,
+    "insight": 22,
     "risk": "Legendary"
   }
 ]

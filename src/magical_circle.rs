@@ -168,6 +168,12 @@ pub fn classify_circle_stroke(stroke: &DrawnStroke, circle: CircleBounds) -> Opt
         0.0
     };
 
+    // Perimeter ticks and script dashes have real drawn length — a
+    // near-zero-length *dot* (e.g. the detached point some rune glyphs
+    // carry) is not decorative writing and must stay rune ink, or the rune
+    // it belongs to loses a piece and stops reading (plan Phase 3 item 4,
+    // geometry over size).
+    let has_dash_length = length_ratio >= 0.02;
     let kind = if closed && orbit <= 0.15 && (0.28..=0.92).contains(&scale) && circle_shape > 0.48 {
         CircleStrokeKind::ReinforcementRing
     } else if closed
@@ -180,6 +186,7 @@ pub fn classify_circle_stroke(stroke: &DrawnStroke, circle: CircleBounds) -> Opt
     } else if (0.78..=1.10).contains(&orbit)
         && scale <= 0.13
         && length_ratio <= 0.30
+        && has_dash_length
         && directness > 0.65
         && stroke.points.len() <= 3
     {
@@ -187,6 +194,7 @@ pub fn classify_circle_stroke(stroke: &DrawnStroke, circle: CircleBounds) -> Opt
     } else if (0.18..=0.88).contains(&orbit)
         && scale <= 0.075
         && length_ratio <= 0.20
+        && has_dash_length
         && directness > 0.65
         && stroke.points.len() <= 3
     {

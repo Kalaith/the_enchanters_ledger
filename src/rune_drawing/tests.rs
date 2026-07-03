@@ -401,3 +401,83 @@ fn eraser_splits_a_stroke_without_clearing_the_whole_mark() {
         .flat_map(|stroke| &stroke.points)
         .all(|point| point.distance(StrokePoint::new(0.50, 0.50)) > 0.08));
 }
+
+#[test]
+fn stable_recognition_without_previous_matches_plain_recognition() {
+    let data = GameData::load().unwrap();
+    let jittered = test_support::perturb(
+        &template_strokes_for_rune("light").unwrap(),
+        1.0,
+        (0.0, 0.0),
+        0.01,
+        5,
+    );
+
+    let plain = recognize_rune(&jittered, all_runes(&data));
+    let stable = recognize_rune_stable(
+        &jittered,
+        all_runes(&data),
+        RecognitionContext::Commission,
+        None,
+    );
+
+    assert_eq!(plain, stable);
+}
+
+#[test]
+fn hysteresis_ignores_a_decisively_beaten_previous_reading() {
+    let data = GameData::load().unwrap();
+    let template = template_strokes_for_rune("sphere").unwrap();
+
+    let outcome = recognize_rune_stable(
+        &template,
+        all_runes(&data),
+        RecognitionContext::Commission,
+        Some("light"),
+    )
+    .unwrap();
+
+    assert_eq!(outcome.rune_id, "sphere", "{outcome:?}");
+}
+
+#[test]
+fn hysteresis_keeps_previous_reading_on_a_near_tie() {
+    let data = GameData::load().unwrap();
+    let sample = samples::ambiguous_shape_samples()
+        .into_iter()
+        .find(|sample| sample.name == "sphere_safer_round_hex")
+        .unwrap()
+        .strokes;
+
+    // Deterministically search seeded jitters of the known-ambiguous hex for
+    // one that lands inside the hysteresis window, so the test keeps working
+    // if tuning shifts the exact scores a little.
+    let (near_tie, baseline) = (0..64u64)
+        .find_map(|seed| {
+            let jittered = test_support::perturb(&sample, 1.0, (0.0, 0.0), 0.012, seed);
+            let outcome = recognize_rune(&jittered, all_runes(&data))?;
+            (outcome.score_gap < RECOGNITION_HYSTERESIS_MARGIN && !outcome.alternatives.is_empty())
+                .then_some((jittered, outcome))
+        })
+        .expect(
+            "test precondition: no jitter of the ambiguous hex lands within \
+             the hysteresis margin any more — pick another near-tie sample",
+        );
+    let runner_up = baseline.alternatives.first().unwrap().rune_id.clone();
+
+    let sticky = recognize_rune_stable(
+        &near_tie,
+        all_runes(&data),
+        RecognitionContext::Commission,
+        Some(&runner_up),
+    )
+    .unwrap();
+
+    assert_eq!(sticky.rune_id, runner_up, "{sticky:?}");
+    assert!(sticky.ambiguous, "{sticky:?}");
+    assert_eq!(
+        sticky.alternatives.first().map(|alt| alt.rune_id.as_str()),
+        Some(baseline.rune_id.as_str()),
+        "the demoted true best should surface as the first alternative: {sticky:?}"
+    );
+}

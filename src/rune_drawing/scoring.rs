@@ -1,4 +1,7 @@
+use super::templates::{all_template_rune_ids, template_variants_for_rune};
 use super::{shape_report_for_rune, DrawnStroke, StrokePoint};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub(super) struct NormalizedDrawing {
@@ -7,7 +10,34 @@ pub(super) struct NormalizedDrawing {
     total_length: f32,
 }
 
+/// Every rune's template variants, already normalized — built once, so the
+/// hot recognition path (every cluster × every rune × every variant) stops
+/// re-normalizing the same static template points on each call (plan Phase 3
+/// item 6, "precompute template feature vectors once").
+pub(super) fn normalized_variants_for_rune(rune_id: &str) -> &'static [NormalizedDrawing] {
+    static CACHE: OnceLock<HashMap<String, Vec<NormalizedDrawing>>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            all_template_rune_ids()
+                .map(|id| {
+                    let variants = template_variants_for_rune(id)
+                        .iter()
+                        .filter_map(|variant| NormalizedDrawing::from_strokes(variant))
+                        .collect();
+                    (id.to_string(), variants)
+                })
+                .collect()
+        })
+        .get(rune_id)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
 impl NormalizedDrawing {
+    pub(super) fn stroke_count(&self) -> usize {
+        self.strokes.len()
+    }
+
     /// Arc length after normalization to the drawing's own bounding box —
     /// scale-invariant, so comparing a candidate's to a template's isolates
     /// "was this stroke drawn to completion" (ink_ratio) from "how big was
@@ -66,49 +96,36 @@ impl NormalizedDrawing {
     }
 }
 
+/// Blends template point-matching with the rune's *declared* structural
+/// profile (plan Phase 1 item 3). Fully data-driven: the rune id is only a
+/// key into `rune_templates.json` — there are no per-rune branches here, so
+/// a new rune's structural behavior is a JSON edit, not Rust.
 pub(super) fn adjusted_score_for_rune(
     rune_id: &str,
     source_strokes: &[DrawnStroke],
     candidate: &NormalizedDrawing,
     template: &NormalizedDrawing,
 ) -> f32 {
-    let score = score_against_template(candidate, template);
-    let circle = circle_likeness(candidate);
-    match rune_id {
-        "sphere" => {
-            let structure = shape_report_for_rune(rune_id, source_strokes)
-                .map_or(1.0, |report| report.structural_score);
-            score.max(circle * 0.92) * (0.52 + structure * 0.48)
-        }
-        "safer" => {
-            let structure = shape_report_for_rune(rune_id, source_strokes)
-                .map_or(1.0, |report| report.structural_score);
-            let sphere_structure = shape_report_for_rune("sphere", source_strokes)
-                .map_or(0.0, |report| report.structural_score);
-            let circle_penalty = if sphere_structure > 0.80 && structure < 0.62 {
-                0.42
-            } else {
-                1.0
-            };
-            score * (0.28 + structure * 0.72) * circle_penalty
-        }
-        "touch" => {
-            let structure = shape_report_for_rune(rune_id, source_strokes)
-                .map_or(1.0, |report| report.structural_score);
-            score * (0.36 + structure * 0.64)
-        }
-        "force" => {
-            let structure = shape_report_for_rune(rune_id, source_strokes)
-                .map_or(1.0, |report| report.structural_score);
-            score * (0.30 + structure * 0.70)
-        }
-        "beam" | "aura" | "burst" | "cone" => {
-            let structure = shape_report_for_rune(rune_id, source_strokes)
-                .map_or(1.0, |report| report.structural_score);
-            score * (0.42 + structure * 0.58)
-        }
-        _ => score,
+    let mut score = score_against_template(candidate, template);
+    let Some(spec) = super::templates::structure_spec_for_rune(rune_id) else {
+        return score;
+    };
+    let structure = shape_report_for_rune(rune_id, source_strokes)
+        .map_or(1.0, |report| report.structural_score);
+    if let Some(floor) = spec.circle_floor {
+        score = score.max(circle_likeness(candidate) * floor);
     }
+    let mut adjusted = score * (1.0 - spec.blend + spec.blend * structure);
+    if let Some(suppression) = &spec.suppressed_by {
+        let their_structure = shape_report_for_rune(&suppression.rune, source_strokes)
+            .map_or(0.0, |report| report.structural_score);
+        if their_structure > suppression.their_structure_min
+            && structure < suppression.own_structure_below
+        {
+            adjusted *= suppression.factor;
+        }
+    }
+    adjusted
 }
 
 fn score_against_template(candidate: &NormalizedDrawing, template: &NormalizedDrawing) -> f32 {

@@ -9,7 +9,7 @@
 //! (plan Phase 4 item 1, `crate::recipes`).
 
 use super::circle::{is_inside_working_circle, ring_shape_score};
-use super::geometry::{cluster_strokes, StrokeBounds};
+use super::geometry::{bounds_gap, cluster_strokes, StrokeBounds};
 use super::recognition::{
     extract_overlapped_spheres, push_recognized_rune, recover_contaminated_multi_stroke_rune,
     ScopeContext,
@@ -50,6 +50,64 @@ const MIN_NESTED_RING_QUALITY: f32 = 0.40;
 /// center reads as reinforcement decoration, not a distinct scope.
 const NESTED_RING_MIN_ORBIT: f32 = 0.20;
 
+/// How close (relative to the mark's own size) another stroke must sit for a
+/// would-be perimeter/script mark to instead count as part of a rune group —
+/// effectively "touching/overlapping", far tighter than band tick spacing.
+const GROUPED_INK_GAP_FACTOR: f32 = 0.12;
+/// Only strokes of comparable size anchor a rescue — a reinforcement ring's
+/// bounding box covers everything inside it, and must not vacuum every tick
+/// it encloses into rune ink.
+const GROUPED_INK_MAX_SPAN_RATIO: f32 = 4.0;
+
+/// Plan Phase 3 item 4, "structure vs. rune ink by geometry": what makes a
+/// perimeter tick or script flick *decorative* is that it stands alone; the
+/// same-sized strokes of a small multi-stroke rune (e.g. an asterisk rune's
+/// four crossing 2-point bars) practically touch or overlap one another. Any
+/// small structure mark that touches another comparably-sized stroke is
+/// flipped back to rune ink. Band ticks keep their spacing — adjacent ticks
+/// sit apart by a good fraction of their own length — so real script and
+/// perimeter bands keep their classification even when densely drawn.
+fn keep_grouped_ink_as_runes(
+    ink: &[(usize, DrawnStroke)],
+    marks: Vec<(usize, CircleMark)>,
+) -> Vec<(usize, CircleMark)> {
+    let bounds: Vec<(usize, StrokeBounds)> = ink
+        .iter()
+        .filter_map(|(index, stroke)| StrokeBounds::from_stroke(stroke).map(|b| (*index, b)))
+        .collect();
+    marks
+        .into_iter()
+        .map(|(index, mark)| {
+            if !matches!(
+                mark.kind,
+                CircleStrokeKind::PerimeterMark | CircleStrokeKind::ScriptMark
+            ) {
+                return (index, mark);
+            }
+            let Some((_, own)) = bounds.iter().find(|(i, _)| *i == index) else {
+                return (index, mark);
+            };
+            let own_span = own.diagonal().max(0.001);
+            let grouped = bounds.iter().any(|(other_index, other)| {
+                *other_index != index
+                    && other.diagonal() <= own_span * GROUPED_INK_MAX_SPAN_RATIO
+                    && bounds_gap(*own, *other) <= GROUPED_INK_GAP_FACTOR * own_span
+            });
+            if grouped {
+                (
+                    index,
+                    CircleMark {
+                        kind: CircleStrokeKind::RuneInk,
+                        ..mark
+                    },
+                )
+            } else {
+                (index, mark)
+            }
+        })
+        .collect()
+}
+
 pub(crate) struct ScopeOutcome {
     /// Runes recognized directly in this scope — does *not* include sub-scope runes; see
     /// `flatten_runes`/`build_scope_spell` for the two different ways callers reassemble this
@@ -76,12 +134,14 @@ pub(crate) fn interpret_scope(
         scope_bounds.max_x,
         scope_bounds.max_y,
     );
-    let classified_marks = ink
-        .iter()
-        .filter_map(|(index, stroke)| {
-            classify_circle_stroke(stroke, spell_bounds).map(|mark| (*index, mark))
-        })
-        .collect::<Vec<_>>();
+    let classified_marks = keep_grouped_ink_as_runes(
+        ink,
+        ink.iter()
+            .filter_map(|(index, stroke)| {
+                classify_circle_stroke(stroke, spell_bounds).map(|mark| (*index, mark))
+            })
+            .collect::<Vec<_>>(),
+    );
 
     let mut own_runes = Vec::new();
     let mut sub_scopes = Vec::new();

@@ -2,10 +2,12 @@
 
 use crate::data::RuneDef;
 use crate::rune_drawing::{
-    acceptance_band, merge_continuation_strokes, recognize_rune_in_context, shape_report_for_rune,
+    acceptance_band, all_template_rune_ids, merge_continuation_strokes, shape_report_for_rune,
     stroke_assignment, template_strokes_for_rune, template_variants_for_rune, DrawnStroke,
     RecognitionContext, ShapeIssue, StrokePoint,
 };
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub struct RunePracticeReport {
@@ -46,20 +48,19 @@ struct StrictScores {
 fn best_variant_scores(rune_id: &str, strokes: &[DrawnStroke]) -> Option<StrictScores> {
     let strokes = merge_continuation_strokes(strokes);
     let candidate = NormalizedDrawing::from_strokes(&strokes)?;
-    template_variants_for_rune(rune_id)
-        .into_iter()
-        .filter_map(|template| {
-            let template = NormalizedDrawing::from_strokes(&template)?;
-            let shape = ordered_shape_score(&candidate, &template);
-            let start = start_point_score(&candidate, &template);
-            let order = stroke_order_score(&candidate, &template);
+    normalized_template_variants(rune_id)
+        .iter()
+        .map(|template| {
+            let shape = ordered_shape_score(&candidate, template);
+            let start = start_point_score(&candidate, template);
+            let order = stroke_order_score(&candidate, template);
             let quality = (shape * 0.46 + start * 0.22 + order * 0.32).clamp(0.0, 1.0);
-            Some(StrictScores {
+            StrictScores {
                 shape,
                 start,
                 order,
                 quality,
-            })
+            }
         })
         .reduce(|best, next| {
             if next.quality > best.quality {
@@ -70,17 +71,57 @@ fn best_variant_scores(rune_id: &str, strokes: &[DrawnStroke]) -> Option<StrictS
         })
 }
 
+/// Strict quality runs inside the identity loop for every rune, so its
+/// template normalization is on the same hot path as scoring's — cache the
+/// normalized variants once, same as `scoring::normalized_variants_for_rune`.
+fn normalized_template_variants(rune_id: &str) -> &'static [NormalizedDrawing] {
+    static CACHE: OnceLock<HashMap<String, Vec<NormalizedDrawing>>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            all_template_rune_ids()
+                .map(|id| {
+                    let variants = template_variants_for_rune(id)
+                        .iter()
+                        .filter_map(|variant| NormalizedDrawing::from_strokes(variant))
+                        .collect();
+                    (id.to_string(), variants)
+                })
+                .collect()
+        })
+        .get(rune_id)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
 /// Scores a Practice-slate drawing (plan Phase 5 item 1): recognition itself is identical to
 /// everywhere else, but acceptance uses `RecognitionContext::Practice`'s stricter band — this is
 /// where correct technique is taught, so a mark that would pass in commission work still gets
 /// flagged here.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn practice_report_for_rune<'a>(
     rune_id: &str,
     strokes: &[DrawnStroke],
     runes: impl IntoIterator<Item = &'a RuneDef>,
 ) -> Option<RunePracticeReport> {
+    practice_report_for_rune_stable(rune_id, strokes, runes, None)
+}
+
+/// `practice_report_for_rune` with readout hysteresis: pass the rune id the
+/// player was shown on their previous check of this drawing, and a near-tied
+/// re-check keeps that reading instead of flipping (plan Phase 1 item 4).
+pub fn practice_report_for_rune_stable<'a>(
+    rune_id: &str,
+    strokes: &[DrawnStroke],
+    runes: impl IntoIterator<Item = &'a RuneDef>,
+    previous_read: Option<&str>,
+) -> Option<RunePracticeReport> {
     let scores = best_variant_scores(rune_id, strokes)?;
-    let recognized = recognize_rune_in_context(strokes, runes, RecognitionContext::Practice);
+    let recognized = crate::rune_drawing::recognize_rune_stable(
+        strokes,
+        runes,
+        RecognitionContext::Practice,
+        previous_read,
+    );
     let shape_score = scores.shape;
     let start_score = scores.start;
     let stroke_order_score = scores.order;

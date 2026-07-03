@@ -1,44 +1,194 @@
+use super::templates::structure_spec_for_rune;
 use super::{DrawnStroke, StrokePoint};
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A rune's structural profile, declared in
+/// `assets/data/rune_templates.json` (plan Phase 1 item 3). Every field maps
+/// to a *generic* feature check below — the evaluator has no idea which rune
+/// it is scoring, so adding rune #34 with structural character is a JSON
+/// edit, never a new Rust branch.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct StructureSpec {
+    /// How much the structural score blends into identity:
+    /// `score × (1 − blend + blend × structure)`.
+    pub(crate) blend: f32,
+    /// `score.max(circle_likeness × circle_floor)` before the blend — lets a
+    /// clean round stroke float a circle-shaped rune's identity even when
+    /// point-matching is mediocre.
+    #[serde(default)]
+    pub(crate) circle_floor: Option<f32>,
+    /// If any stroke is effectively closed, structure collapses to this
+    /// score and the "should be open" issue is raised.
+    #[serde(default)]
+    pub(crate) must_be_open: Option<MustBeOpen>,
+    #[serde(default)]
+    pub(crate) min_strokes: Option<usize>,
+    #[serde(default)]
+    pub(crate) max_strokes: Option<usize>,
+    /// Structural score when the stroke count is outside min/max.
+    #[serde(default = "default_fallback_score")]
+    pub(crate) fallback_score: f32,
+    /// Which issue to report on that fallback: "closure", "corners", or
+    /// "center_bar".
+    #[serde(default)]
+    pub(crate) fallback_issue: Option<String>,
+    pub(crate) checks: Vec<FeatureCheck>,
+    /// Data-declared cross-rune disambiguation: when the *other* rune's
+    /// structure fits this ink decisively better, dampen this rune's score.
+    #[serde(default)]
+    pub(crate) suppressed_by: Option<SuppressedBy>,
+}
+
+fn default_fallback_score() -> f32 {
+    0.30
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct MustBeOpen {
+    pub(crate) score: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SuppressedBy {
+    pub(crate) rune: String,
+    pub(crate) their_structure_min: f32,
+    pub(crate) own_structure_below: f32,
+    pub(crate) factor: f32,
+}
+
+/// One weighted, generic feature check. `feature` picks the geometry
+/// function; the optional `issue_*` fields decide when this check also
+/// yields player-facing feedback (first triggered check in declaration
+/// order wins).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct FeatureCheck {
+    pub(crate) feature: Feature,
+    #[serde(default)]
+    pub(crate) weight: f32,
+    /// `corners`: the side count the rune wants, with `tolerance` shaping
+    /// how fast the score falls off per missing/extra corner. `stroke_count`:
+    /// the stroke count the template expects.
+    #[serde(default)]
+    pub(crate) target: Option<f32>,
+    #[serde(default)]
+    pub(crate) tolerance: Option<f32>,
+    /// `corner_penalty`: corners past `above` each subtract `per_corner`.
+    #[serde(default)]
+    pub(crate) above: Option<f32>,
+    #[serde(default)]
+    pub(crate) per_corner: Option<f32>,
+    /// `stroke_count_band`: full score inside [min, max], `out_of_band_score`
+    /// outside.
+    #[serde(default)]
+    pub(crate) min: Option<usize>,
+    #[serde(default)]
+    pub(crate) max: Option<usize>,
+    #[serde(default)]
+    pub(crate) out_of_band_score: Option<f32>,
+    #[serde(default)]
+    pub(crate) issue_below: Option<f32>,
+    #[serde(default)]
+    pub(crate) issue_below_count: Option<f32>,
+    #[serde(default)]
+    pub(crate) issue_above_count: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Feature {
+    Closure,
+    Roundness,
+    Corners,
+    CornerPenalty,
+    Straightness,
+    Directness,
+    ArrowRight,
+    ArrowDown,
+    CenterBar,
+    RayAngles,
+    RayCenter,
+    StrokeCount,
+    StrokeCountBand,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum ShapeIssue {
     NotClosed,
     NotRoundEnough,
-    TooManyStraightLines,
-    NotEnoughSides,
-    TooManySides,
+    TooManyStraightLines(String),
+    NotEnoughSides(String, u32),
+    TooManySides(String, u32),
     NotStraightEnough,
-    ShouldBeOpen,
-    MissingArrowStructure,
-    MissingBeamStructure,
-    MissingAuraStructure,
-    MissingBurstStructure,
-    MissingConeStructure,
-    MissingDiamondStructure,
+    ShouldBeOpen(String),
+    MissingArrowRight(String),
+    MissingArrowDown(String),
+    MissingCenterBar(String),
+    MissingRayStructure(String),
+}
+
+fn number_word(n: u32) -> String {
+    match n {
+        1 => "one".into(),
+        2 => "two".into(),
+        3 => "three".into(),
+        4 => "four".into(),
+        5 => "five".into(),
+        6 => "six".into(),
+        7 => "seven".into(),
+        8 => "eight".into(),
+        9 => "nine".into(),
+        10 => "ten".into(),
+        11 => "eleven".into(),
+        12 => "twelve".into(),
+        other => other.to_string(),
+    }
+}
+
+fn display_name(rune_id: &str) -> String {
+    let mut chars = rune_id.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 impl ShapeIssue {
-    pub(crate) fn message(self) -> &'static str {
+    pub(crate) fn message(&self) -> String {
         match self {
-            ShapeIssue::NotClosed => "The stroke needs to close cleanly.",
-            ShapeIssue::NotRoundEnough => "The circle drifts too far from a steady radius.",
-            ShapeIssue::TooManyStraightLines => "Too many straight sides are showing for Sphere.",
-            ShapeIssue::NotEnoughSides => "Safer needs six clear sides.",
-            ShapeIssue::TooManySides => "Safer has too many corners; keep it to six sides.",
-            ShapeIssue::NotStraightEnough => "The straight rune lines need to be cleaner.",
-            ShapeIssue::ShouldBeOpen => "Touch should be an open arrow, not a closed shape.",
-            ShapeIssue::MissingArrowStructure => "Touch needs a clear shaft and arrow head.",
-            ShapeIssue::MissingBeamStructure => {
-                "Beam needs a clear right-pointing shaft and arrow head."
+            ShapeIssue::NotClosed => "The stroke needs to close cleanly.".into(),
+            ShapeIssue::NotRoundEnough => {
+                "The circle drifts too far from a steady radius.".into()
             }
-            ShapeIssue::MissingAuraStructure => {
-                "Aura needs a closed outer shape with a clear center bar."
+            ShapeIssue::TooManyStraightLines(name) => {
+                format!("Too many straight sides are showing for {name}.")
             }
-            ShapeIssue::MissingBurstStructure => {
-                "Burst needs straight rays crossing through the center."
+            ShapeIssue::NotEnoughSides(name, count) => {
+                format!("{name} needs {} clear sides.", number_word(*count))
             }
-            ShapeIssue::MissingConeStructure => "Cone needs a closed triangular outline.",
-            ShapeIssue::MissingDiamondStructure => "Force needs a closed diamond outline.",
+            ShapeIssue::TooManySides(name, count) => {
+                format!(
+                    "{name} has too many corners; keep it to {} sides.",
+                    number_word(*count)
+                )
+            }
+            ShapeIssue::NotStraightEnough => {
+                "The straight rune lines need to be cleaner.".into()
+            }
+            ShapeIssue::ShouldBeOpen(name) => {
+                format!("{name} should be an open arrow, not a closed shape.")
+            }
+            ShapeIssue::MissingArrowRight(name) => {
+                format!("{name} needs a clear right-pointing shaft and arrow head.")
+            }
+            ShapeIssue::MissingArrowDown(name) => {
+                format!("{name} needs a clear shaft and arrow head.")
+            }
+            ShapeIssue::MissingCenterBar(name) => {
+                format!("{name} needs a closed outer shape with a clear center bar.")
+            }
+            ShapeIssue::MissingRayStructure(name) => {
+                format!("{name} needs straight rays crossing through the center.")
+            }
         }
     }
 }
@@ -49,279 +199,207 @@ pub(crate) struct RuneShapeReport {
     pub(crate) issue: Option<ShapeIssue>,
 }
 
+/// Evaluates the rune's declared structural profile (if any) against the
+/// ink. The rune id is only used to *look up* the spec and to name the rune
+/// in feedback — no recognition logic branches on it (plan Phase 1 item 3).
 pub(crate) fn shape_report_for_rune(
     rune_id: &str,
     strokes: &[DrawnStroke],
 ) -> Option<RuneShapeReport> {
+    let spec = structure_spec_for_rune(rune_id)?;
     let ink = NormalizedInk::from_strokes(strokes)?;
-    match rune_id {
-        "sphere" => Some(sphere_report(&ink)),
-        "safer" => Some(safer_report(&ink)),
-        "touch" => Some(touch_report(&ink)),
-        "beam" => Some(beam_report(&ink)),
-        "aura" => Some(aura_report(&ink)),
-        "burst" => Some(burst_report(&ink)),
-        "cone" => Some(cone_report(&ink)),
-        "force" => Some(diamond_report(&ink)),
+    Some(structure_report(spec, &ink, rune_id))
+}
+
+fn structure_report(spec: &StructureSpec, ink: &NormalizedInk, rune_id: &str) -> RuneShapeReport {
+    let name = display_name(rune_id);
+
+    if let Some(open) = &spec.must_be_open {
+        let any_closed = ink
+            .strokes
+            .iter()
+            .any(|stroke| closure_score(stroke) > 0.72);
+        if any_closed {
+            return RuneShapeReport {
+                structural_score: open.score,
+                issue: Some(ShapeIssue::ShouldBeOpen(name)),
+            };
+        }
+    }
+
+    let stroke_count = ink.strokes.len();
+    let below_min = spec.min_strokes.is_some_and(|min| stroke_count < min);
+    let above_max = spec.max_strokes.is_some_and(|max| stroke_count > max);
+    if below_min || above_max {
+        return RuneShapeReport {
+            structural_score: spec.fallback_score,
+            issue: fallback_issue(spec, &name),
+        };
+    }
+
+    let (primary_index, primary) = primary_stroke(ink);
+    let mut structural_score = 0.0;
+    let mut issue = None;
+    for check in &spec.checks {
+        let score = feature_score(check, ink, primary, primary_index);
+        match check.feature {
+            Feature::CornerPenalty => structural_score -= score,
+            _ => structural_score += score * check.weight,
+        }
+        if issue.is_none() {
+            issue = check_issue(check, primary, &name, score);
+        }
+    }
+
+    RuneShapeReport {
+        structural_score: structural_score.clamp(0.0, 1.0),
+        issue,
+    }
+}
+
+fn fallback_issue(spec: &StructureSpec, name: &str) -> Option<ShapeIssue> {
+    let corner_target = spec
+        .checks
+        .iter()
+        .find(|check| check.feature == Feature::Corners)
+        .and_then(|check| check.target)
+        .map(|target| target.round() as u32)
+        .unwrap_or(0);
+    match spec.fallback_issue.as_deref() {
+        Some("closure") => Some(ShapeIssue::NotClosed),
+        Some("corners") => Some(ShapeIssue::NotEnoughSides(name.to_owned(), corner_target)),
+        Some("center_bar") => Some(ShapeIssue::MissingCenterBar(name.to_owned())),
         _ => None,
     }
 }
 
-fn sphere_report(ink: &NormalizedInk) -> RuneShapeReport {
-    let Some(stroke) = ink.single_stroke() else {
-        return RuneShapeReport {
-            structural_score: 0.35,
-            issue: Some(ShapeIssue::NotClosed),
-        };
-    };
-    let closed = closure_score(stroke);
-    let circular = circularity(stroke, ink.aspect_ratio);
-    let corners = corner_count(stroke);
-    let corner_penalty = if corners >= 6.0 {
-        (corners - 5.0) * 0.06
-    } else {
-        0.0
-    };
-    let structural_score = (closed * 0.30 + circular * 0.70 - corner_penalty).clamp(0.0, 1.0);
-    let issue = if closed < 0.72 {
-        Some(ShapeIssue::NotClosed)
-    } else if circular < 0.66 {
-        Some(ShapeIssue::NotRoundEnough)
-    } else if corners >= 7.0 && circular < 0.82 {
-        Some(ShapeIssue::TooManyStraightLines)
-    } else {
-        None
-    };
-    RuneShapeReport {
-        structural_score,
-        issue,
-    }
-}
-
-fn beam_report(ink: &NormalizedInk) -> RuneShapeReport {
-    let any_closed = ink
-        .strokes
-        .iter()
-        .any(|stroke| closure_score(stroke) > 0.72);
-    if any_closed {
-        return RuneShapeReport {
-            structural_score: 0.18,
-            issue: Some(ShapeIssue::ShouldBeOpen),
-        };
-    }
-
-    let directness = average_directness(ink);
-    let rightward = rightward_arrow_score(ink);
-    let stroke_count_score = if (1..=3).contains(&ink.strokes.len()) {
-        1.0
-    } else {
-        0.45
-    };
-    let structural_score =
-        (directness * 0.38 + rightward * 0.42 + stroke_count_score * 0.20).clamp(0.0, 1.0);
-    let issue = if rightward < 0.50 {
-        Some(ShapeIssue::MissingBeamStructure)
-    } else if directness < 0.54 {
-        Some(ShapeIssue::NotStraightEnough)
-    } else {
-        None
-    };
-    RuneShapeReport {
-        structural_score,
-        issue,
-    }
-}
-
-fn aura_report(ink: &NormalizedInk) -> RuneShapeReport {
-    if ink.strokes.len() < 2 {
-        return RuneShapeReport {
-            structural_score: 0.32,
-            issue: Some(ShapeIssue::MissingAuraStructure),
-        };
-    }
-
-    let closed_stroke = ink
-        .strokes
+/// The stroke structural checks focus on: the most-closed one (a rune's
+/// outline), ties broken toward the earlier stroke so the report is
+/// deterministic. For single-stroke runes this is simply the stroke.
+fn primary_stroke(ink: &NormalizedInk) -> (usize, &[StrokePoint]) {
+    ink.strokes
         .iter()
         .enumerate()
         .max_by(|(a_index, a), (b_index, b)| {
             closure_score(a)
                 .total_cmp(&closure_score(b))
                 .then_with(|| b_index.cmp(a_index))
-        });
-    let Some((outline_index, outline)) = closed_stroke else {
-        return RuneShapeReport {
-            structural_score: 0.20,
-            issue: Some(ShapeIssue::MissingAuraStructure),
-        };
-    };
-    let closed = closure_score(outline);
-    let corners = corner_count(outline);
-    let side_score = (1.0 - (corners - 6.0).abs() / 4.0).clamp(0.0, 1.0);
-    let bar = ink
-        .strokes
+        })
+        .map(|(index, stroke)| (index, stroke.as_slice()))
+        .unwrap_or((0, &[]))
+}
+
+fn feature_score(
+    check: &FeatureCheck,
+    ink: &NormalizedInk,
+    primary: &[StrokePoint],
+    primary_index: usize,
+) -> f32 {
+    match check.feature {
+        Feature::Closure => closure_score(primary),
+        Feature::Roundness => circularity(primary, ink.aspect_ratio),
+        Feature::Corners => {
+            let corners = corner_count(primary);
+            let target = check.target.unwrap_or(4.0);
+            let tolerance = check.tolerance.unwrap_or(3.0).max(0.001);
+            (1.0 - (corners - target).abs() / tolerance).clamp(0.0, 1.0)
+        }
+        Feature::CornerPenalty => {
+            let corners = corner_count(primary);
+            let above = check.above.unwrap_or(f32::INFINITY);
+            let per_corner = check.per_corner.unwrap_or(0.0);
+            if corners >= above + 1.0 {
+                (corners - above) * per_corner
+            } else {
+                0.0
+            }
+        }
+        Feature::Straightness => straight_section_score(primary),
+        Feature::Directness => average_directness(ink),
+        Feature::ArrowRight => rightward_arrow_score(ink),
+        Feature::ArrowDown => downward_arrow_score(ink),
+        Feature::CenterBar => center_bar_score(ink, primary_index),
+        Feature::RayAngles => ray_angle_spread(ink),
+        Feature::RayCenter => ray_center_score(ink),
+        Feature::StrokeCount => {
+            count_score(ink.strokes.len(), check.target.unwrap_or(1.0).round() as usize)
+        }
+        Feature::StrokeCountBand => {
+            let min = check.min.unwrap_or(0);
+            let max = check.max.unwrap_or(usize::MAX);
+            if (min..=max).contains(&ink.strokes.len()) {
+                1.0
+            } else {
+                check.out_of_band_score.unwrap_or(0.45)
+            }
+        }
+    }
+}
+
+fn check_issue(
+    check: &FeatureCheck,
+    primary: &[StrokePoint],
+    name: &str,
+    score: f32,
+) -> Option<ShapeIssue> {
+    let target = check.target.unwrap_or(0.0).round() as u32;
+    if check.feature == Feature::Corners {
+        let corners = corner_count(primary);
+        if check
+            .issue_below_count
+            .is_some_and(|threshold| corners < threshold)
+        {
+            return Some(ShapeIssue::NotEnoughSides(name.to_owned(), target));
+        }
+        if check
+            .issue_above_count
+            .is_some_and(|threshold| corners > threshold)
+        {
+            return Some(ShapeIssue::TooManySides(name.to_owned(), target));
+        }
+        if check.issue_below.is_some_and(|threshold| score < threshold) {
+            return Some(ShapeIssue::NotEnoughSides(name.to_owned(), target));
+        }
+        return None;
+    }
+    if check.feature == Feature::CornerPenalty {
+        let corners = corner_count(primary);
+        if check
+            .issue_above_count
+            .is_some_and(|threshold| corners >= threshold)
+        {
+            return Some(ShapeIssue::TooManyStraightLines(name.to_owned()));
+        }
+        return None;
+    }
+    let below = check.issue_below.is_some_and(|threshold| score < threshold);
+    if !below {
+        return None;
+    }
+    Some(match check.feature {
+        Feature::Closure => ShapeIssue::NotClosed,
+        Feature::Roundness => ShapeIssue::NotRoundEnough,
+        Feature::Straightness | Feature::Directness => ShapeIssue::NotStraightEnough,
+        Feature::ArrowRight => ShapeIssue::MissingArrowRight(name.to_owned()),
+        Feature::ArrowDown => ShapeIssue::MissingArrowDown(name.to_owned()),
+        Feature::CenterBar => ShapeIssue::MissingCenterBar(name.to_owned()),
+        Feature::RayAngles | Feature::RayCenter => {
+            ShapeIssue::MissingRayStructure(name.to_owned())
+        }
+        _ => return None,
+    })
+}
+
+/// The best "horizontal bar through the middle" among the non-outline
+/// strokes — the outline itself (the most-closed stroke) is excluded, so a
+/// hexagon ring never scores as its own center bar.
+fn center_bar_score(ink: &NormalizedInk, primary_index: usize) -> f32 {
+    ink.strokes
         .iter()
         .enumerate()
-        .filter(|(index, _)| *index != outline_index)
+        .filter(|(index, _)| *index != primary_index)
         .map(|(_, stroke)| horizontal_center_bar_score(stroke))
-        .fold(0.0, f32::max);
-    let structural_score =
-        (closed * 0.26 + side_score * 0.24 + bar * 0.36 + count_score(ink.strokes.len(), 2) * 0.14)
-            .clamp(0.0, 1.0);
-    let issue = if closed < 0.70 {
-        Some(ShapeIssue::NotClosed)
-    } else if bar < 0.48 {
-        Some(ShapeIssue::MissingAuraStructure)
-    } else {
-        None
-    };
-    RuneShapeReport {
-        structural_score,
-        issue,
-    }
-}
-
-fn burst_report(ink: &NormalizedInk) -> RuneShapeReport {
-    let directness = average_directness(ink);
-    let angle_score = burst_angle_score(ink);
-    let center_score = burst_center_score(ink);
-    let count = count_score(ink.strokes.len(), 4);
-    let structural_score =
-        (directness * 0.30 + angle_score * 0.30 + center_score * 0.25 + count * 0.15)
-            .clamp(0.0, 1.0);
-    let issue = if center_score < 0.48 || angle_score < 0.50 {
-        Some(ShapeIssue::MissingBurstStructure)
-    } else if directness < 0.54 {
-        Some(ShapeIssue::NotStraightEnough)
-    } else {
-        None
-    };
-    RuneShapeReport {
-        structural_score,
-        issue,
-    }
-}
-
-fn cone_report(ink: &NormalizedInk) -> RuneShapeReport {
-    let Some(stroke) = ink.single_stroke() else {
-        return RuneShapeReport {
-            structural_score: 0.30,
-            issue: Some(ShapeIssue::MissingConeStructure),
-        };
-    };
-    let closed = closure_score(stroke);
-    let corners = corner_count(stroke);
-    let side_score = (1.0 - (corners - 3.0).abs() / 3.0).clamp(0.0, 1.0);
-    let straight = straight_section_score(stroke);
-    let structural_score = (closed * 0.28 + side_score * 0.42 + straight * 0.30).clamp(0.0, 1.0);
-    let issue = if closed < 0.70 {
-        Some(ShapeIssue::NotClosed)
-    } else if corners < 3.0 || side_score < 0.50 {
-        Some(ShapeIssue::MissingConeStructure)
-    } else if straight < 0.54 {
-        Some(ShapeIssue::NotStraightEnough)
-    } else {
-        None
-    };
-    RuneShapeReport {
-        structural_score,
-        issue,
-    }
-}
-
-fn diamond_report(ink: &NormalizedInk) -> RuneShapeReport {
-    let Some(stroke) = ink.single_stroke() else {
-        return RuneShapeReport {
-            structural_score: 0.30,
-            issue: Some(ShapeIssue::MissingDiamondStructure),
-        };
-    };
-    let closed = closure_score(stroke);
-    let corners = corner_count(stroke);
-    let side_score = (1.0 - (corners - 4.0).abs() / 3.0).clamp(0.0, 1.0);
-    let straight = straight_section_score(stroke);
-    let structural_score = (closed * 0.26 + side_score * 0.44 + straight * 0.30).clamp(0.0, 1.0);
-    let issue = if closed < 0.70 {
-        Some(ShapeIssue::NotClosed)
-    } else if corners < 4.0 || side_score < 0.55 {
-        Some(ShapeIssue::MissingDiamondStructure)
-    } else if straight < 0.54 {
-        Some(ShapeIssue::NotStraightEnough)
-    } else {
-        None
-    };
-    RuneShapeReport {
-        structural_score,
-        issue,
-    }
-}
-
-fn safer_report(ink: &NormalizedInk) -> RuneShapeReport {
-    let Some(stroke) = ink.single_stroke() else {
-        return RuneShapeReport {
-            structural_score: 0.30,
-            issue: Some(ShapeIssue::NotClosed),
-        };
-    };
-    let closed = closure_score(stroke);
-    let corners = corner_count(stroke);
-    let side_score = (1.0 - (corners - 6.0).abs() / 4.0).clamp(0.0, 1.0);
-    let straight = straight_section_score(stroke);
-    let structural_score = (closed * 0.24 + side_score * 0.46 + straight * 0.30).clamp(0.0, 1.0);
-    let issue = if closed < 0.70 {
-        Some(ShapeIssue::NotClosed)
-    } else if corners < 5.0 {
-        Some(ShapeIssue::NotEnoughSides)
-    } else if corners > 8.0 {
-        Some(ShapeIssue::TooManySides)
-    } else if straight < 0.54 {
-        Some(ShapeIssue::NotStraightEnough)
-    } else {
-        None
-    };
-    RuneShapeReport {
-        structural_score,
-        issue,
-    }
-}
-
-fn touch_report(ink: &NormalizedInk) -> RuneShapeReport {
-    let any_closed = ink
-        .strokes
-        .iter()
-        .any(|stroke| closure_score(stroke) > 0.72);
-    if any_closed {
-        return RuneShapeReport {
-            structural_score: 0.18,
-            issue: Some(ShapeIssue::ShouldBeOpen),
-        };
-    }
-
-    let directness = ink
-        .strokes
-        .iter()
-        .map(|stroke| stroke_directness(stroke))
-        .sum::<f32>()
-        / ink.strokes.len().max(1) as f32;
-    let downward = touch_downward_score(ink);
-    let stroke_count_score = if (1..=3).contains(&ink.strokes.len()) {
-        1.0
-    } else {
-        0.45
-    };
-    let structural_score =
-        (directness * 0.42 + downward * 0.38 + stroke_count_score * 0.20).clamp(0.0, 1.0);
-    let issue = if downward < 0.48 {
-        Some(ShapeIssue::MissingArrowStructure)
-    } else if directness < 0.54 {
-        Some(ShapeIssue::NotStraightEnough)
-    } else {
-        None
-    };
-    RuneShapeReport {
-        structural_score,
-        issue,
-    }
+        .fold(0.0, f32::max)
 }
 
 #[derive(Debug, Clone)]
@@ -376,10 +454,6 @@ impl NormalizedInk {
             strokes: normalized,
             aspect_ratio: width / height,
         })
-    }
-
-    fn single_stroke(&self) -> Option<&[StrokePoint]> {
-        (self.strokes.len() == 1).then_some(self.strokes[0].as_slice())
     }
 }
 
@@ -523,7 +597,7 @@ fn straight_section_score(points: &[StrokePoint]) -> f32 {
     straight as f32 / (sampled.len() - 3).max(1) as f32
 }
 
-fn touch_downward_score(ink: &NormalizedInk) -> f32 {
+fn downward_arrow_score(ink: &NormalizedInk) -> f32 {
     let points = ink
         .strokes
         .iter()
@@ -614,7 +688,7 @@ fn horizontal_center_bar_score(stroke: &[StrokePoint]) -> f32 {
         .clamp(0.0, 1.0)
 }
 
-fn burst_angle_score(ink: &NormalizedInk) -> f32 {
+fn ray_angle_spread(ink: &NormalizedInk) -> f32 {
     let mut bins = [false; 4];
     for stroke in &ink.strokes {
         let Some(start) = stroke.first() else {
@@ -636,7 +710,7 @@ fn burst_angle_score(ink: &NormalizedInk) -> f32 {
     bins.iter().filter(|filled| **filled).count() as f32 / bins.len() as f32
 }
 
-fn burst_center_score(ink: &NormalizedInk) -> f32 {
+fn ray_center_score(ink: &NormalizedInk) -> f32 {
     let center = StrokePoint::new(0.5, 0.5);
     ink.strokes
         .iter()

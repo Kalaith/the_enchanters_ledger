@@ -313,3 +313,73 @@ built by following prd.md rules is recognized and named without any code special
 Quick wins that can ship independently before/alongside Phase 1:
 - Hungarian assignment (A1), open-stroke corner fix (A4), strict-vs-variant fix (A6),
   eraser fragment merge (A7), deterministic tie-breaks — all small, all pure wins.
+
+---
+
+## Implementation status — audited & closed out (2026-07-04)
+
+A full phase-by-phase audit of this plan against the code, followed by an
+implementation pass on the gaps it found. Detailed rules live in `prd.md`;
+this is the scoreboard.
+
+### Done (verified against exit criteria)
+
+- **Phase 0** — capture pipeline, confusion-matrix gate, property tests,
+  prd.md ruleset. Gate now also asserts **margins** (clean ≥ 0.04,
+  perturbed ≥ 0.02 over the runner-up) and sweeps **scale 0.5–2.0×**
+  (up-scale clamped to what fits the slate); the tracked-confusion
+  allowlist moved out of test code into `rune_templates.json`
+  (`confusable_with`).
+- **Phase 1** — canonicalize-at-capture, optimal assignment, softened
+  cliffs, all five bug fixes. The last two gaps are now closed:
+  **rune structural checks are data-driven** (`structure` blocks in
+  `rune_templates.json`, one generic evaluator, zero per-rune-id branches
+  in `shape.rs`/`scoring.rs` — adding rune #34 is a JSON edit) and
+  **readout hysteresis** exists (`recognize_rune_stable`, wired into the
+  practice slate; interpretation stays history-free).
+- **Phase 2** — potency (scale curve + ink_ratio), evaluate() wiring,
+  layout bias deleted. Documented deviations stand: uniform category-level
+  magnitude curve instead of per-rune band tables; quality kept separate
+  from potency.
+- **Phase 3** — multi-stroke circles, containment hierarchy, scale-relative
+  clustering + spatial grid, MIN_RUNE_SCALE_IN_CIRCLE gone, draw-order
+  independence. New this pass: structure-vs-rune-ink got two more
+  *geometric* rules (script/perimeter marks need real dash length — dots
+  stay rune ink; marks touching comparably-sized ink are rescued as rune
+  ink), template normalization is precomputed once, and ink_ratio no
+  longer re-scores every variant.
+- **Phase 4** — spell tree, diminishing amplifiers, containment budget,
+  recipes as data (fireball + volcano), cause-specific backfires. Verified
+  complete as designed.
+- **Phase 5** — per-context bands, mastery-fading aids, diagnostic hints.
+  New this pass: **commissions can require structure and sub-scopes**
+  (`required_structure`, `required_sub_scopes` in `commissions.json`),
+  difficulty 4+ commissions demand rings/satellites, and the new
+  `ember_gardens` (difficulty 7) demands a two-vent multi-scope diagram.
+  Pacing tests now cover **every** commission difficulty 1–7 with a
+  degraded hand, plus a negative test that plain diagrams fail
+  structure-demanding commissions.
+- **Phase 6** — size sweep 3→300 in CI, replay CLI (`--diagnose`). New this
+  pass: a **heterogeneous ~150-symbol** round-trip (mixed adjacent runes,
+  including a multi-stroke rune) whose order-shuffle assertion demands the
+  identical interpretation (ids/centers/scales/potencies), not just the
+  same count.
+
+### Still deferred (tracked, deliberate)
+
+- **Real human corpus samples** — the capture pipeline works end-to-end
+  (practice slate → "Capture Sample" → `tests/corpus/<rune>/…json` → gate
+  test), but `tests/corpus/` holds no samples yet. This needs a human to
+  draw; the harness is waiting.
+- **Beam-search segmentation** (Phase 3 item 5) — `extract_overlapped_spheres`
+  / `recover_contaminated_multi_stroke_rune` remain (window-based recovery
+  over a spatial ordering, not true subset search). All current tests pass
+  without it; revisit if freehand play surfaces cluster-splitting failures.
+- **Release-mode perf gate** (Phase 3 item 6 / Phase 6) — CI asserts a 5 s
+  debug sanity bound, not the plan's 100 ms native / 250 ms wasm target.
+  Needs a `--release` benchmark job.
+- **Per-cluster result cache + dirty-region re-interpretation** — not
+  needed at current sizes (300-symbol diagrams interpret comfortably);
+  template-side precompute landed instead.
+- **Per-rune potency itemization in the UI** — the slate shows average
+  potency; a per-rune readout is a UI polish task.

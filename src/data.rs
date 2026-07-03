@@ -157,6 +157,17 @@ pub struct CommissionDef {
     pub required_shape: String,
     pub required_trigger: String,
     pub optional_modifier: Option<String>,
+    /// Story pacing (plan Phase 5 item 4): structural work — reinforcement
+    /// rings, satellite seals, etc. on the root scope — this commission
+    /// demands beyond its runes. Checked against the diagram's `ScopeSpell`
+    /// tree in `evaluate()`, same as recipe structure requirements. All
+    /// zeros (the default) means no structural demand.
+    #[serde(default)]
+    pub required_structure: StructureRequirement,
+    /// Endgame pacing: how many distinct sub-scope circles (each its own
+    /// nested diagram) the root scope must carry. 0 means none required.
+    #[serde(default)]
+    pub required_sub_scopes: usize,
     pub difficulty: u32,
     pub reward: i64,
     pub reputation: i64,

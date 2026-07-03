@@ -533,6 +533,134 @@ fn synthetic_diagram_round_trips_across_sizes_with_jitter() {
     }
 }
 
+/// Like `jittered_rune_grid`, but cycles through several rune ids so adjacent
+/// symbols are *different* runes — merge/eat regressions between unlike
+/// neighbors don't show up on a single-rune grid.
+fn mixed_jittered_rune_grid(
+    rune_ids: &[&str],
+    count_target: usize,
+    spacing: f32,
+    scale: f32,
+    seed: u64,
+) -> (Vec<DrawnStroke>, Vec<&'static str>) {
+    let mut strokes = Vec::new();
+    let mut expected: Vec<&'static str> = Vec::new();
+    let mut placed = 0usize;
+    let steps = (0.80 / spacing).ceil() as i32 + 1;
+    'grid: for row in -steps..=steps {
+        for col in -steps..=steps {
+            let x = 0.50 + col as f32 * spacing;
+            let y = 0.50 + row as f32 * spacing;
+            let nx = (x - 0.50) / 0.40;
+            let ny = (y - 0.50) / 0.38;
+            if nx * nx + ny * ny > 1.0 {
+                continue;
+            }
+            let rune_id = match rune_ids[placed % rune_ids.len()] {
+                "spark" => "spark",
+                "warmth" => "warmth",
+                "light" => "light",
+                other => Box::leak(other.to_owned().into_boxed_str()),
+            };
+            // Multi-stroke runes carry fine detail (2-point rays) that
+            // physically cannot survive at the smallest sizes single-stroke
+            // flicks can — draw those a bit larger, like a real hand would.
+            let instance_scale = if rune_id == "light" { scale * 1.7 } else { scale };
+            let instance = template_at(rune_id, x, y, instance_scale);
+            let jitter_amp = scale * 0.03;
+            strokes.extend(perturb(
+                &instance,
+                1.0,
+                (0.0, 0.0),
+                jitter_amp,
+                seed + placed as u64,
+            ));
+            expected.push(rune_id);
+            placed += 1;
+            if placed >= count_target {
+                break 'grid;
+            }
+        }
+    }
+    (strokes, expected)
+}
+
+#[test]
+fn heterogeneous_diagram_round_trips_and_order_shuffle_changes_nothing() {
+    // Phase 3 item 7 exit criterion, heterogeneous leg: ~150 *mixed* symbols
+    // (adjacent neighbors are different runes) round-trip — every symbol
+    // found, none merged or eaten — and a draw-order shuffle produces the
+    // *identical* interpretation (same runes at the same places with the
+    // same potencies), not merely the same count.
+    let data = GameData::load().unwrap();
+    let runes = rank_one(&data);
+    let (symbols, expected) = mixed_jittered_rune_grid(
+        &["spark", "warmth", "light"],
+        150,
+        0.052,
+        0.020,
+        42_000,
+    );
+    assert!(expected.len() >= 150, "grid only placed {}", expected.len());
+
+    let mut strokes = outer_circle();
+    strokes.extend(symbols.clone());
+    let interpretation = interpret_diagram(&strokes, runes.iter().copied());
+
+    assert!(interpretation.accepted(), "{interpretation:?}");
+    assert_eq!(
+        interpretation.runes.len(),
+        expected.len(),
+        "found {} of {} mixed symbols",
+        interpretation.runes.len(),
+        expected.len()
+    );
+    let mut found: Vec<&str> = interpretation
+        .runes
+        .iter()
+        .map(|rune| rune.rune_id.as_str())
+        .collect();
+    let mut wanted = expected.clone();
+    found.sort_unstable();
+    wanted.sort_unstable();
+    assert_eq!(found, wanted, "some symbols were misread");
+
+    // Full-interpretation order independence: reverse every symbol stroke
+    // (keep the circle first so the same working circle is found) and demand
+    // the same reading rune-for-rune, not just the same count.
+    let mut shuffled = outer_circle();
+    shuffled.extend(symbols.iter().rev().cloned());
+    let reshuffled = interpret_diagram(&shuffled, runes.iter().copied());
+
+    let key = |rune: &InterpretedRune| {
+        (
+            rune.rune_id.clone(),
+            (rune.center.x * 1000.0).round() as i32,
+            (rune.center.y * 1000.0).round() as i32,
+        )
+    };
+    // `quality` is deliberately absent from this comparison: identity,
+    // placement, scale and potency must be order-independent, but quality
+    // *rewards* canonical stroke order by design (prd.md §3), so reversing
+    // the strokes legitimately lowers it.
+    let mut original: Vec<_> = interpretation.runes.iter().map(|rune| {
+        (key(rune), rune.scale, rune.potency)
+    }).collect();
+    let mut swapped: Vec<_> = reshuffled.runes.iter().map(|rune| {
+        (key(rune), rune.scale, rune.potency)
+    }).collect();
+    original.sort_by(|a, b| a.0.cmp(&b.0));
+    swapped.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(original.len(), swapped.len(), "shuffle changed the rune count");
+    for (a, b) in original.iter().zip(&swapped) {
+        assert_eq!(a.0, b.0, "shuffle moved or renamed a rune");
+        assert!(
+            (a.1 - b.1).abs() < 1e-4 && (a.2 - b.2).abs() < 1e-4,
+            "shuffle changed a rune's numbers: {a:?} vs {b:?}"
+        );
+    }
+}
+
 #[test]
 fn fireball_recipe_recognized_purely_from_data() {
     // Plan Phase 4 exit criterion: "fireball ... defined purely in data" — one scope, no
@@ -852,3 +980,4 @@ fn stroke_at(points: &[(f32, f32)], cx: f32, cy: f32, scale: f32) -> DrawnStroke
             .collect(),
     }
 }
+

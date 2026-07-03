@@ -14,12 +14,20 @@ use scoring::{adjusted_score_for_rune, NormalizedDrawing};
 pub(crate) use shape::{shape_report_for_rune, ShapeIssue};
 #[cfg(test)]
 pub(crate) use templates::raw;
+pub(crate) use templates::all_template_rune_ids;
 pub use templates::template_strokes_for_rune;
 pub(crate) use templates::template_variants_for_rune;
 
 pub const MIN_RECOGNITION_CONFIDENCE: f32 = 0.32;
 pub const MIN_RECOGNITION_MARGIN: f32 = 0.04;
 const AMBIGUOUS_ACCEPTANCE_CONFIDENCE: f32 = 0.58;
+/// How much a *new* best rune must beat a previously shown reading by before
+/// a re-check of the (possibly nudged) drawing is allowed to flip the
+/// readout — plan Phase 1 item 4, hysteresis for a stable UI readout. This
+/// only acts when a caller explicitly passes its previous reading
+/// (`recognize_rune_stable`); plain recognition stays history-free, so the
+/// "same ink → same result" determinism invariant is untouched.
+pub const RECOGNITION_HYSTERESIS_MARGIN: f32 = 0.03;
 
 /// Where a drawing is being read (plan Phase 5 item 1): the recognizer and its scoring math
 /// (confidence/quality values) are identical in every context — only the *acceptance* cutoff
@@ -210,6 +218,30 @@ pub fn recognize_rune_in_context<'a>(
     runes: impl IntoIterator<Item = &'a RuneDef>,
     context: RecognitionContext,
 ) -> Option<RecognitionOutcome> {
+    recognize_with_previous(strokes, runes, context, None)
+}
+
+/// Like `recognize_rune_in_context`, but sticky: if `previous` (the reading
+/// the player was last shown for this drawing) is still within
+/// `RECOGNITION_HYSTERESIS_MARGIN` of the new best, the readout keeps the
+/// previous rune instead of flipping on a hair's difference (plan Phase 1
+/// item 4 / issue A3). The true new best still appears as the first
+/// alternative, and the sticky outcome is marked `ambiguous`.
+pub fn recognize_rune_stable<'a>(
+    strokes: &[DrawnStroke],
+    runes: impl IntoIterator<Item = &'a RuneDef>,
+    context: RecognitionContext,
+    previous: Option<&str>,
+) -> Option<RecognitionOutcome> {
+    recognize_with_previous(strokes, runes, context, previous)
+}
+
+fn recognize_with_previous<'a>(
+    strokes: &[DrawnStroke],
+    runes: impl IntoIterator<Item = &'a RuneDef>,
+    context: RecognitionContext,
+    previous: Option<&str>,
+) -> Option<RecognitionOutcome> {
     let band = acceptance_band(context);
     let strokes = merge_continuation_strokes(strokes);
     let candidate = NormalizedDrawing::from_strokes(&strokes)?;
@@ -219,29 +251,57 @@ pub fn recognize_rune_in_context<'a>(
             // Cheap pre-filter (plan Phase 3 item 6 / perf budget): a template variant whose
             // stroke count is wildly different from what was drawn has no realistic chance of
             // winning (missing/extra-stroke penalties in `score_against_template` already push
-            // it toward the acceptance floor), so skip the full normalize-and-score pass for it
-            // — this matters once a diagram's hundreds of small clusters are each scored against
-            // every rune's every variant.
-            let best_score = template_variants_for_rune(&rune.id)
-                .into_iter()
-                .filter(|template| template.len().abs_diff(strokes.len()) <= 2)
-                .filter_map(|template| NormalizedDrawing::from_strokes(&template))
-                .map(|template| adjusted_score_for_rune(&rune.id, &strokes, &candidate, &template))
-                .max_by(|a, b| a.total_cmp(b))?;
+            // it toward the acceptance floor), so skip the full scoring pass for it — this
+            // matters once a diagram's hundreds of small clusters are each scored against
+            // every rune's every variant. Templates come pre-normalized from a static cache.
+            // Ties between variants break to the lowest variant index (the canonical template
+            // first), so equal-scoring variants can never flip the outcome between runs.
+            let (best_score, _, best_template) = scoring::normalized_variants_for_rune(&rune.id)
+                .iter()
+                .enumerate()
+                .filter(|(_, template)| template.stroke_count().abs_diff(strokes.len()) <= 2)
+                .map(|(index, template)| {
+                    (
+                        adjusted_score_for_rune(&rune.id, &strokes, &candidate, template),
+                        index,
+                        template,
+                    )
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.1.cmp(&a.1)))?;
             let strict = crate::rune_quality::strict_quality_for_rune(&rune.id, &strokes)
                 .unwrap_or(best_score);
             let quality = (best_score * (0.70 + strict * 0.30)).clamp(0.0, 1.0);
-            Some((rune.id.clone(), best_score, quality))
+            Some((
+                rune.id.clone(),
+                best_score,
+                quality,
+                best_template.total_length(),
+            ))
         })
         .collect::<Vec<_>>();
     scores.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let (rune_id, mut confidence, mut quality) = scores.first().cloned()?;
+    // Hysteresis (plan Phase 1 item 4): a previously shown reading only
+    // yields to a *decisively* better one. The demoted true best becomes the
+    // first alternative, and the narrowed score_gap below marks the sticky
+    // outcome ambiguous, so the acceptance band still gets the final say.
+    if let Some(previous) = previous {
+        if let Some(position) = scores.iter().position(|entry| entry.0 == previous) {
+            if position > 0
+                && scores[0].1 - scores[position].1 < RECOGNITION_HYSTERESIS_MARGIN
+            {
+                let sticky = scores.remove(position);
+                scores.insert(0, sticky);
+            }
+        }
+    }
+    let (rune_id, mut confidence, mut quality, winning_template_length) =
+        scores.first().cloned()?;
     let raw_confidence = confidence;
     let alternatives = scores
         .iter()
         .skip(1)
         .take(3)
-        .map(|(rune_id, confidence, quality)| RecognitionCandidate {
+        .map(|(rune_id, confidence, quality, _)| RecognitionCandidate {
             rune_id: rune_id.clone(),
             confidence: *confidence,
             quality: *quality,
@@ -266,15 +326,10 @@ pub fn recognize_rune_in_context<'a>(
     quality = quality.clamp(0.0, 1.0);
     let accepted =
         confidence >= band.confidence && (!ambiguous || confidence >= band.ambiguous_confidence);
-    let ink_ratio = template_variants_for_rune(&rune_id)
-        .into_iter()
-        .filter_map(|template| NormalizedDrawing::from_strokes(&template))
-        .max_by(|a, b| {
-            adjusted_score_for_rune(&rune_id, &strokes, &candidate, a)
-                .total_cmp(&adjusted_score_for_rune(&rune_id, &strokes, &candidate, b))
-        })
-        .map(|template| candidate.total_length() / template.total_length().max(0.01))
-        .unwrap_or(1.0);
+    // Measured against the same variant that won the identity score above —
+    // re-ranking variants here could disagree with the scoring pass on an
+    // exact tie, and would re-score every variant for nothing.
+    let ink_ratio = candidate.total_length() / winning_template_length.max(0.01);
 
     Some(RecognitionOutcome {
         rune_id,

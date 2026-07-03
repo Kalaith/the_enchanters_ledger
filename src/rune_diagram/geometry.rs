@@ -14,7 +14,12 @@ use std::collections::HashMap;
 /// already a complete glyph on its own, so its reach must stay conservative (scaled off the
 /// *smaller* of the two) or it swallows unrelated ink drawn nearby — a big circle's own bounding
 /// diagonal is not a sensible "how far can I reach for a neighbor" radius.
-const OPEN_CENTER_DISTANCE_FACTOR: f32 = 0.65;
+// 0.72: an elongated open glyph's shaft has its center far from the small
+// head/dot drawn past its tip (`on_touch`'s bar center sits ~0.67 of the
+// bar's own diagonal from its chevron's center) — 0.65 split that glyph in
+// two. Neighbor instances in dense grids sit several diagonals apart, so
+// the extra reach does not merge them.
+const OPEN_CENTER_DISTANCE_FACTOR: f32 = 0.72;
 const OPEN_STROKE_DISTANCE_FACTOR: f32 = 0.35;
 const CLOSED_CENTER_DISTANCE_FACTOR: f32 = 0.42;
 const CLOSED_STROKE_DISTANCE_FACTOR: f32 = 0.21;
@@ -319,7 +324,7 @@ pub(crate) fn distance(a: StrokePoint, b: StrokePoint) -> f32 {
 /// bound on the true minimum distance between the strokes they contain, so `strokes_should_cluster`
 /// can skip `stroke_distance`'s O(p²) segment-pair scan whenever the boxes alone are already too
 /// far apart to possibly cluster (plan item 6 / C4).
-fn bounds_gap(a: StrokeBounds, b: StrokeBounds) -> f32 {
+pub(crate) fn bounds_gap(a: StrokeBounds, b: StrokeBounds) -> f32 {
     let dx = (a.min_x.max(b.min_x) - a.max_x.min(b.max_x)).max(0.0);
     let dy = (a.min_y.max(b.min_y) - a.max_y.min(b.max_y)).max(0.0);
     (dx * dx + dy * dy).sqrt()

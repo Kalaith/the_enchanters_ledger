@@ -166,10 +166,36 @@ impl GameSession {
         ]
         .iter()
         .all(|category| by_category.contains_key(category));
+        // Story pacing (plan Phase 5 item 4): mid-game commissions can demand structural work
+        // (rings, satellites, ...) and endgame ones whole sub-scope diagrams — checked against
+        // the same `ScopeSpell` tree the recipe grammar reads. Commissions with no declared
+        // structure (the JSON default) are unaffected.
+        let needs = &commission.required_structure;
+        let needs_structure = needs.rings > 0
+            || needs.satellites > 0
+            || needs.radials > 0
+            || needs.perimeter > 0
+            || needs.scripts > 0
+            || commission.required_sub_scopes > 0;
+        let structure_met = !needs_structure
+            || self
+                .board
+                .last_diagram
+                .as_ref()
+                .and_then(|diagram| diagram.scope_spell.as_ref())
+                .is_some_and(|tree| {
+                    tree.ring_count >= needs.rings
+                        && tree.satellite_count >= needs.satellites
+                        && tree.radial_count >= needs.radials
+                        && tree.perimeter_mark_count >= needs.perimeter
+                        && tree.script_mark_count >= needs.scripts
+                        && tree.sub_scopes.len() >= commission.required_sub_scopes
+                });
         // Sandbox (plan Phase 5 item 1) is free experimentation, not commissioned work — there
         // is no specific request to match, so `evaluate()`'s request-matching gate is trivially
         // satisfied rather than forcing every sandbox diagram to `Failed`.
-        let matched_request = self.sandbox_mode || required_hits == required.len();
+        let matched_request =
+            self.sandbox_mode || (required_hits == required.len() && structure_met);
         let average_quality = if placed.is_empty() {
             0.0
         } else {

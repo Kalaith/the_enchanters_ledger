@@ -4,7 +4,7 @@ use crate::browser_clipboard::{copy_text, ClipboardCopy};
 use crate::data::GameData;
 use crate::rune_diagnostics::diagnose_session;
 use crate::rune_drawing::{canonicalize_stroke, erase_strokes_at, DrawnStroke};
-use crate::rune_quality::{practice_report_for_rune, RunePracticeReport};
+use crate::rune_quality::RunePracticeReport;
 use crate::state::{migrate_save_value, CraftReport, GamePhase, GameSession, SaveData};
 use crate::ui::{self, PracticeUi, UiAction, UiContext};
 use macroquad::prelude::*;
@@ -514,7 +514,20 @@ impl Game {
             .runes
             .iter()
             .filter(|rune| self.session.can_use_rune(rune));
-        let Some(report) = practice_report_for_rune(&rune_id, &self.practice.strokes, runes) else {
+        // Re-checks of the same evolving drawing keep the previously shown
+        // reading unless the new best decisively beats it (readout
+        // hysteresis) — see `recognize_rune_stable`.
+        let previous_read = self
+            .practice
+            .report
+            .as_ref()
+            .and_then(|report| report.read_rune_id.clone());
+        let Some(report) = crate::rune_quality::practice_report_for_rune_stable(
+            &rune_id,
+            &self.practice.strokes,
+            runes,
+            previous_read.as_deref(),
+        ) else {
             self.notifications
                 .warning("The practice mark is too faint to score.");
             return;

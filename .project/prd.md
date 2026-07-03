@@ -137,26 +137,48 @@ Template *shapes* are data-driven: all 33 runes' stroke layouts (plus the
 `touch`/`continuous` variants) live in `assets/data/rune_templates.json`,
 loaded once into a lazily-built table (`rune_drawing/templates.rs`) —
 adding a rune's drawable shape is a JSON edit, no Rust. What is **not**
-data-driven yet is the *structural check* layer below: eight of 33 runes
-have a hand-written check in `shape_report_for_rune`
-(`src/rune_drawing/shape.rs:52`) that multiplies into their score:
+data-driven as of the Phase 1 completion pass is the *structural check*
+layer below: a rune may declare a `structure` block in
+`rune_templates.json`, evaluated by one generic checker
+(`shape::structure_report`) with **zero per-rune-id branches in Rust** —
+the plan's Phase 1 item 3 exit criterion. The schema:
 
-| Rune | Structural check | Corner target | Notes |
-|---|---|---|---|
-| `sphere` | closure × circularity, corner penalty above 6 corners | n/a (round) | `sphere_report` |
-| `safer` | closure, side count, straightness | 6 (±4 tolerance) | hexagon; `safer_report` |
-| `force` | closure, side count, straightness | 4 (±3 tolerance) | diamond; `diamond_report` |
-| `touch` | arrow/shaft structure | — | `touch_report` |
-| `beam` / `aura` / `burst` / `cone` | shape-specific structure | — | see `shape.rs` |
+```json
+"structure": {
+  "blend": 0.72,                      // score × (1 − blend + blend × structure)
+  "circle_floor": 0.92,               // optional: score.max(circle_likeness × floor)
+  "must_be_open": {"score": 0.18},    // optional: any closed stroke ⇒ this score + issue
+  "min_strokes": 1, "max_strokes": 1, // outside ⇒ fallback_score + fallback_issue
+  "fallback_score": 0.30, "fallback_issue": "closure|corners|center_bar",
+  "suppressed_by": {                  // optional cross-rune disambiguation
+    "rune": "sphere", "their_structure_min": 0.80,
+    "own_structure_below": 0.62, "factor": 0.42 },
+  "checks": [                         // weighted generic feature checks, in
+    ...                               // issue-priority order
+  ]
+}
+```
 
-**Deferred:** generalizing this table into data-driven rules (per plan item
-3 — "generic feature checks... computed from the template itself; delete
-the per-rune match arms") did not happen this pass. `sphere`/`safer`/
-`force`/`cone` reduce fairly cleanly to `{closed, corner_range}`, but
-`touch`/`beam`/`aura`/`burst` use bespoke geometry (arrow-tip detection,
-horizontal-bar crossing, radial-spoke angles) that doesn't fit a
-5-parameter generic model without a real rule DSL — a separate design
-task, not a mechanical data move like the template shapes above were.
+Check features: `closure`, `roundness`, `corners` (`target`/`tolerance`),
+`corner_penalty` (`above`/`per_corner`), `straightness`, `directness`,
+`arrow_right`, `arrow_down`, `center_bar`, `ray_angles`, `ray_center`,
+`stroke_count` (`target`), `stroke_count_band` (`min`/`max`/
+`out_of_band_score`). Each check may carry `issue_below` (and for corners
+`issue_below_count`/`issue_above_count`) — the first triggered check in
+declaration order supplies the player-facing feedback message, generated
+generically from the feature kind, the rune's display name and the corner
+target ("Safer needs six clear sides."). Current declarations mirror the
+former hand-written checks exactly: `sphere`, `safer`, `force`, `touch`,
+`beam`, `aura`, `burst`, `cone`. Adding rune #34 with structural character
+is now a JSON edit. A rune's known-confusable partners also live in the
+data (`"confusable_with": ["sphere"]` on `safer`) and feed the
+confusion-matrix gate's tracked-confusion allowlist via
+`templates::known_confusions()`.
+
+The eight structural-check functions the table in earlier revisions of
+this document described (`sphere_report` … `touch_report`) are deleted;
+their weights and thresholds moved verbatim into the JSON blocks above, so
+scoring behavior is unchanged.
 
 Corner counting (`corner_count`, `shape.rs`) resamples a stroke to 36
 arc-length points and computes a turn angle between the sample 2 steps
@@ -203,6 +225,20 @@ MIN_RECOGNITION_MARGIN`, smooth in between (previously a hard `×0.92/×0.96`
 step at the margin line). See
 `property_tests::ambiguity_penalty_has_no_visible_cliff`.
 (`src/rune_drawing.rs:19-21`, `recognize_rune`.)
+
+**Readout hysteresis (plan Phase 1 item 4).** A previously shown reading
+only yields to a *decisively* better one: `recognize_rune_stable(strokes,
+runes, context, previous)` keeps `previous` as the winner when the new
+best beats it by less than `RECOGNITION_HYSTERESIS_MARGIN = 0.03`. The
+demoted true best surfaces as the first alternative and the sticky outcome
+is marked `ambiguous`, so the acceptance band still gets the final say.
+Hysteresis only acts when a caller explicitly passes its previous reading —
+plain recognition and diagram interpretation stay history-free, so the
+"same ink → same result" determinism invariant (§2.1) is untouched. Wired
+into the practice slate (`practice_report_for_rune_stable`, fed the
+previous check's `read_rune_id` by `game::score_practice`). Tests:
+`rune_drawing::tests::hysteresis_*`,
+`stable_recognition_without_previous_matches_plain_recognition`.
 
 ### 2.5 Density dependence (A8) — mitigated at capture, still present at the recognizer level
 
@@ -392,10 +428,28 @@ scope (`classify_circle_stroke`, `magical_circle.rs`), using `orbit`
 |---|---|
 | `ReinforcementRing` | closed, `orbit ≤ 0.15`, `scale` 0.28–0.92 |
 | `SatelliteSeal` | closed, ≥12 points, `orbit` 0.22–0.78, `scale` 0.055–0.24 |
-| `PerimeterMark` | `orbit` 0.78–1.10, `scale ≤ 0.13`, short, `directness > 0.65`, ≤3 points |
-| `ScriptMark` | `orbit` 0.18–0.88, `scale ≤ 0.075`, very short, `directness > 0.65`, ≤3 points |
+| `PerimeterMark` | `orbit` 0.78–1.10, `scale ≤ 0.13`, short but `length_ratio ≥ 0.02`, `directness > 0.65`, ≤3 points |
+| `ScriptMark` | `orbit` 0.18–0.88, `scale ≤ 0.075`, very short but `length_ratio ≥ 0.02`, `directness > 0.65`, ≤3 points |
 | `RadialSpoke` | directness > 0.86, spans center → ring |
 | `RuneInk` | none of the above |
+
+The `length_ratio ≥ 0.02` floor (relative to the scope's radius) encodes
+that ticks and script dashes have real drawn *length* — a near-zero-length
+dot (e.g. the detached point some rune glyphs carry, like `on_touch`'s) is
+not decorative writing and stays rune ink.
+
+**Grouped-ink rescue (geometry over size, Phase 3 item 4).** After
+classification, any `PerimeterMark`/`ScriptMark` whose ink practically
+touches another comparably-sized stroke (bounds gap ≤
+`GROUPED_INK_GAP_FACTOR = 0.12` × its own diagonal, other stroke ≤
+`GROUPED_INK_MAX_SPAN_RATIO = 4×` its size) is flipped back to `RuneInk`
+(`scope::keep_grouped_ink_as_runes`): what makes a tick *decorative* is
+that it stands alone, while a small multi-stroke rune's 2-point rays (e.g.
+the `light` asterisk drawn at 2–3% circle scale) overlap each other. Band
+ticks keep their spacing — adjacent ticks sit apart by a good fraction of
+their own length — so real script/perimeter bands are not rescued. The
+size-ratio cap keeps a large ring's bounding box from vacuuming every tick
+it encloses.
 
 `directness` (start-to-end distance ÷ total arc length) and the ≤3-point
 cap are Phase 3 item 4 additions (C1/C2): a real perimeter tick or script
@@ -656,6 +710,7 @@ alongside it.
 |---|---|---|---|
 | `MIN_RECOGNITION_CONFIDENCE` | 0.32 | `rune_drawing.rs` | §2.4 acceptance floor |
 | `MIN_RECOGNITION_MARGIN` | 0.04 | `rune_drawing.rs` | §2.4 ambiguity band |
+| `RECOGNITION_HYSTERESIS_MARGIN` | 0.03 | `rune_drawing.rs` | §2.4 readout hysteresis (only via `recognize_rune_stable`) |
 | `AMBIGUOUS_ACCEPTANCE_CONFIDENCE` | 0.58 | `rune_drawing.rs` | §2.4 confident-despite-ambiguous |
 | `MIN_ERASE_FRAGMENT_LENGTH` | 0.008 | `rune_drawing.rs` | §2.1 eraser debris |
 | `MERGE_MAX_GAP` | 0.02 (or 15% of shorter stroke) | `rune_drawing.rs` | §2.1 continuation merge |
@@ -678,8 +733,10 @@ alongside it.
 | chain gap limit | `(chain_span × 0.12).max(0.02)` | `rune_diagram/circle.rs` | §5.1 endpoint-touch tolerance when chaining arcs |
 | `MIN_RUNE_CLUSTER_POINTS` | 4 | `rune_diagram/recognition.rs` | §5.2 rune legibility floor (replaces `MIN_RUNE_SCALE_IN_CIRCLE`, C1/C2) |
 | structure-mark `directness` gate | `> 0.65`, ≤3 points | `magical_circle.rs` | §5.2 `PerimeterMark`/`ScriptMark` (C1/C2) |
+| structure-mark dash-length floor | `length_ratio ≥ 0.02` | `magical_circle.rs` | §5.2 dots are rune ink, not script |
+| `GROUPED_INK_GAP_FACTOR` / `GROUPED_INK_MAX_SPAN_RATIO` | 0.12 × own diagonal / 4× size cap | `rune_diagram/scope.rs` | §5.2 grouped-ink rescue |
 | structure-mark population thresholds | satellites ≥3 @ q>0.68, rings ≥2 @ q>0.48, scripts ≥8 @ q>0.42, radials ≥6 @ q>0.68 | `rune_diagram.rs` | §5.2 |
-| `OPEN_CENTER_DISTANCE_FACTOR` / `OPEN_STROKE_DISTANCE_FACTOR` | 0.65 / 0.35 (× larger of pair's diagonals) | `rune_diagram/geometry.rs` | §5.6 clustering, open-pair reach (C3) |
+| `OPEN_CENTER_DISTANCE_FACTOR` / `OPEN_STROKE_DISTANCE_FACTOR` | 0.72 / 0.35 (× larger of pair's diagonals; 0.72 so an elongated glyph's shaft still reaches the small head past its tip, e.g. `on_touch`) | `rune_diagram/geometry.rs` | §5.6 clustering, open-pair reach (C3) |
 | `CLOSED_CENTER_DISTANCE_FACTOR` / `CLOSED_STROKE_DISTANCE_FACTOR` | 0.42 / 0.21 (× smaller of pair's diagonals) | `rune_diagram/geometry.rs` | §5.6 clustering, closed-involved-pair reach (C3) |
 | `MIN_CLUSTER_CENTER_DISTANCE` / `MIN_CLUSTER_STROKE_DISTANCE` | 0.018 / 0.009 | `rune_diagram/geometry.rs` | §5.6 clustering floors |
 | nested/touching-bbox override | full containment (8% tolerance) or bbox gap ≤ 0.004 | `rune_diagram/geometry.rs` | §5.6 closed-pair override back to the open/generous factors |
@@ -711,17 +768,22 @@ alongside it.
 | `RuneMastery::score` | `accepted_count × (quality_sum / accepted_count)` | `state.rs` | §9.2 |
 | guide opacity fade | `GUIDE_BASE_ALPHA (0.32) / (1.0 + mastery_score / GUIDE_FADE_SCALE (6.0))` | `ui/drawing.rs` | §9.2 |
 | `GUIDE_FREE_INSIGHT` | 1 | `state/work.rs` | §9.2 |
+| commission `required_structure` / `required_sub_scopes` | per-commission, in `commissions.json`; checked against the root `ScopeSpell` counts in `evaluate()` | `data.rs`, `state/evaluate.rs` | §9.4 story pacing |
+| confusion-gate margins | clean/affine cases `score_gap ≥ 0.04`; resample/jitter cases `≥ 0.02`; confusable pairs exempt from margin only | `rune_drawing/confusion_gate.rs` | §7 |
 
 ---
 
 ## 7. Verification
 
-- **`src/rune_drawing/confusion_gate.rs`** — every rune template plus 10
-  deterministic perturbations (translate, scale, sparse/dense resample,
-  seeded jitter) must recognize as itself and be accepted, unless the
-  specific (truth, predicted) pair is in `KNOWN_CONFUSIONS` (§2.3). Down to
-  one tracked entry as of Phase 1 (was four before the corner-confidence
-  softening).
+- **`src/rune_drawing/confusion_gate.rs`** — every rune template plus 12
+  deterministic perturbations (translate, uniform scale 0.5–2.0× — up-scale
+  clamped per template to what physically fits the slate — sparse/dense
+  resample, seeded jitter) must recognize as itself, be accepted, **and**
+  beat the runner-up by the case's margin (clean ≥ 0.04, perturbed ≥ 0.02).
+  Tracked-confusion pairs come from the template data itself
+  (`confusable_with` → `templates::known_confusions()`, §2.3); they are
+  exempt from the margin gate, never from identity. Down to one tracked
+  entry (`safer`→`sphere` under sparse resampling).
 - **`src/rune_drawing/property_tests.rs`** — determinism (same input twice →
   identical `RecognitionOutcome`), translation/scale invariance, point-
   density invariance (with the §2.5 exception), a jitter-monotonicity smoke
@@ -1091,28 +1153,44 @@ reads still get the same soft-quality nudge.
 
 ### 9.4 Story pacing
 
-No new `CommissionDef` fields or content-authoring pass this phase — the 11
-commissions' difficulty curve (1 through 7) was already coarsely monotonic,
-and re-authoring pacing content is a design task, not an architecture one.
-Scoped to **verification**, per the plan's own exit-criterion wording:
+As of the completion pass, difficulty *does* gate structure. `CommissionDef`
+gained two optional fields (defaults = no demand, so early commissions are
+untouched):
 
-- **Degraded-corpus check**: every difficulty-≤2 commission, drawn with its
-  three required runes run through a seeded ~15%-scale/translate/jitter
-  perturbation (`rune_drawing::test_support::perturb`, the same helper the
-  confusion-matrix gate uses, made `pub(crate)` for this), still clears
-  `matched_request` and never grades `Failed`
-  (`early_commissions_still_clear_acceptance_when_drawn_with_a_degraded_hand`,
-  §7).
-- **Late-game structure check**: the pre-existing
-  `high_tier_circle_strengthens_city_shield_commission` test already covers
-  this exit criterion — `city_shield` (difficulty 7) drawn with
-  `high_tier_city_circle()`'s multi-ring/satellite structure reaches
-  `Brilliant`. No new test was needed; Phase 5 just confirms it's the
-  right regression guard for this claim.
+- `required_structure` — a `StructureRequirement` (same shape recipes use:
+  rings/satellites/radials/perimeter/scripts), checked against the root
+  `ScopeSpell`'s structure-mark counts;
+- `required_sub_scopes` — how many distinct nested sub-scope circles the
+  root must carry.
 
-This is the honest current state, not a claim that difficulty gates
-structure: nothing *requires* a late commission to be drawn with structure
-today, only rewards it if it is.
+Both are enforced inside `evaluate()`'s `matched_request` gate (sandbox
+exempt, like the rune-request gate). Current authoring: difficulty ≤ 3
+commissions demand nothing; difficulty 4–5 (`orchard_bloom`, `alarm_bell`,
+`silent_gloves`) demand 2 reinforcement rings (± satellites) — 2 because a
+*single* closed ring is deliberately ambiguous with a circle-shaped rune
+(§5.2's ≥2-ring population threshold); difficulty 7 (`city_shield`) demands
+rings 2 + satellites 3; and the new `ember_gardens` (difficulty 7) is the
+endgame multi-scope commission: rings 2, satellites 3, **and 2 sub-scope
+vents**.
+
+Verification (§7):
+
+- **Degraded-corpus checks**: every difficulty-≤2 commission
+  (`early_commissions_still_clear_acceptance_when_drawn_with_a_degraded_hand`)
+  *and* every difficulty-≥3 commission including the structural and
+  multi-scope ones
+  (`mid_and_endgame_commissions_clear_with_degraded_hand_and_structure`)
+  still clears `matched_request` and never grades `Failed` when drawn with
+  the seeded ~15%-scale/translate/jitter degraded hand
+  (`rune_drawing::test_support::perturb`).
+- **Structure actually gates**:
+  `structure_requiring_commission_rejects_a_plain_rune_diagram` — the plain
+  three-rune diagram that clears early commissions does *not* match
+  `city_shield`.
+- **Late-game reward check**: the pre-existing
+  `high_tier_circle_strengthens_city_shield_commission` — `city_shield`
+  drawn with `high_tier_city_circle()`'s multi-ring/satellite structure
+  reaches `Brilliant`.
 
 ---
 
@@ -1131,7 +1209,17 @@ extends the pre-existing single-size
 (§5.6, §7) — which stays exactly as-is, since it's also the order-independence
 exit criterion — with a size sweep from 3 up through 300 `spark` instances
 (`[3, 10, 30, 60, 120, 200, 300]`), each placed via a new `jittered_rune_grid`
-helper. Every instance is perturbed with `rune_drawing::test_support::perturb`
+helper, and — as of the completion pass —
+`heterogeneous_diagram_round_trips_and_order_shuffle_changes_nothing`, which
+places ~150 *mixed* symbols (`spark`/`warmth`/`light` cycling, so adjacent
+neighbors are different runes, multi-stroke `light` drawn proportionally
+larger since its 2-point rays physically cannot survive at flick size),
+asserts every symbol reads as the right rune, and re-interprets the same
+ink with the symbol draw order fully reversed demanding the *identical*
+interpretation — same rune ids at the same centers with the same scales
+and potencies, not merely the same count. (`quality` is deliberately
+excluded from that equality: it rewards canonical stroke order by design,
+§3.) Every instance is perturbed with `rune_drawing::test_support::perturb`
 (the same helper §9.4's degraded-corpus test and the confusion-matrix gate
 use), with `jitter_amp` scaled to that instance's own on-canvas `scale`
 rather than a fixed absolute amplitude — a fixed amplitude tuned for one
