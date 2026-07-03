@@ -155,24 +155,94 @@ fn circle_likeness(drawing: &NormalizedDrawing) -> f32 {
     (radius_score * 0.76 + aspect_score * 0.24).clamp(0.0, 1.0)
 }
 
+const MAX_OPTIMAL_ASSIGNMENT_STROKES: usize = 12;
+
 fn match_strokes_order_insensitive(
     candidate: &[Vec<StrokePoint>],
     template: &[Vec<StrokePoint>],
 ) -> Vec<f32> {
-    let mut pairs = Vec::new();
-    for (candidate_index, candidate_stroke) in candidate.iter().enumerate() {
-        for (template_index, template_stroke) in template.iter().enumerate() {
-            pairs.push((
-                stroke_similarity(candidate_stroke, template_stroke),
-                candidate_index,
-                template_index,
-            ));
+    let similarity = template
+        .iter()
+        .map(|template_stroke| {
+            candidate
+                .iter()
+                .map(|candidate_stroke| stroke_similarity(candidate_stroke, template_stroke))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    if candidate.len() <= MAX_OPTIMAL_ASSIGNMENT_STROKES {
+        optimal_assignment_scores(&similarity, candidate.len())
+    } else {
+        greedy_assignment_scores(&similarity, candidate.len())
+    }
+}
+
+/// Exact best-total pairing of template strokes to distinct candidate strokes.
+/// Greedy pairing flips on near-ties, so a tiny redraw could change the score.
+fn optimal_assignment_scores(similarity: &[Vec<f32>], candidate_count: usize) -> Vec<f32> {
+    let template_count = similarity.len();
+    let mask_count = 1usize << candidate_count;
+    let mut best = vec![vec![f32::NEG_INFINITY; mask_count]; template_count + 1];
+    let mut choice = vec![vec![0u8; mask_count]; template_count + 1];
+    best[0][0] = 0.0;
+    for row in 0..template_count {
+        for mask in 0..mask_count {
+            let value = best[row][mask];
+            if value == f32::NEG_INFINITY {
+                continue;
+            }
+            if value > best[row + 1][mask] {
+                best[row + 1][mask] = value;
+                choice[row + 1][mask] = 0;
+            }
+            for (candidate_index, score) in similarity[row].iter().enumerate() {
+                let bit = 1usize << candidate_index;
+                if mask & bit != 0 {
+                    continue;
+                }
+                let next = value + score;
+                if next > best[row + 1][mask | bit] {
+                    best[row + 1][mask | bit] = next;
+                    choice[row + 1][mask | bit] = candidate_index as u8 + 1;
+                }
+            }
         }
     }
-    pairs.sort_by(|a, b| b.0.total_cmp(&a.0));
 
-    let mut used_candidates = vec![false; candidate.len()];
-    let mut scores = vec![0.0; template.len()];
+    let mut mask = (0..mask_count)
+        .max_by(|a, b| {
+            best[template_count][*a]
+                .total_cmp(&best[template_count][*b])
+                .then_with(|| b.cmp(a))
+        })
+        .unwrap_or(0);
+    let mut scores = vec![0.0; template_count];
+    for row in (0..template_count).rev() {
+        let picked = choice[row + 1][mask];
+        if picked > 0 {
+            let candidate_index = picked as usize - 1;
+            scores[row] = similarity[row][candidate_index];
+            mask &= !(1usize << candidate_index);
+        }
+    }
+    scores
+}
+
+fn greedy_assignment_scores(similarity: &[Vec<f32>], candidate_count: usize) -> Vec<f32> {
+    let mut pairs = Vec::new();
+    for (template_index, row) in similarity.iter().enumerate() {
+        for (candidate_index, score) in row.iter().enumerate() {
+            pairs.push((*score, candidate_index, template_index));
+        }
+    }
+    pairs.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+
+    let mut used_candidates = vec![false; candidate_count];
+    let mut scores = vec![0.0; similarity.len()];
     for (score, candidate_index, template_index) in pairs {
         if used_candidates[candidate_index] || scores[template_index] > 0.0 {
             continue;

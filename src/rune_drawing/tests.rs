@@ -166,6 +166,95 @@ fn closed_star_does_not_read_as_touch() {
 }
 
 #[test]
+fn circle_repaired_in_two_arcs_reads_as_sphere() {
+    let data = GameData::load().unwrap();
+    let mut right_arc = Vec::new();
+    let mut left_arc = Vec::new();
+    for index in 0..=12 {
+        let angle = -std::f32::consts::FRAC_PI_2
+            + std::f32::consts::PI * index as f32 / 12.0;
+        right_arc.push(StrokePoint::new(
+            0.50 + 0.34 * angle.cos(),
+            0.50 + 0.34 * angle.sin(),
+        ));
+        left_arc.push(StrokePoint::new(
+            0.50 - 0.34 * angle.cos(),
+            0.50 - 0.34 * angle.sin(),
+        ));
+    }
+    let strokes = vec![
+        DrawnStroke { points: right_arc },
+        DrawnStroke { points: left_arc },
+    ];
+
+    let merged = merge_continuation_strokes(&strokes);
+    let result = recognize_rune(&strokes, unlocked_rank_one(&data)).unwrap();
+
+    assert_eq!(merged.len(), 1, "{merged:?}");
+    assert_eq!(result.rune_id, "sphere", "{result:?}");
+    assert!(result.accepted, "{result:?}");
+}
+
+#[test]
+fn connected_arrowhead_strokes_stay_separate() {
+    let beam_with_attached_barbs = raw(&[
+        &[(0.14, 0.50), (0.84, 0.50)],
+        &[(0.84, 0.50), (0.66, 0.34)],
+        &[(0.84, 0.50), (0.66, 0.66)],
+    ]);
+
+    let merged = merge_continuation_strokes(&beam_with_attached_barbs);
+
+    assert_eq!(merged.len(), 3, "{merged:?}");
+}
+
+#[test]
+fn recognition_is_deterministic_for_identical_ink() {
+    let data = GameData::load().unwrap();
+    let strokes = samples::structural_rune_samples()
+        .into_iter()
+        .find(|sample| sample.name == "sphere_rough")
+        .unwrap()
+        .strokes;
+
+    let first = recognize_rune(&strokes, all_runes(&data)).unwrap();
+    let second = recognize_rune(&strokes, all_runes(&data)).unwrap();
+
+    assert_eq!(first, second);
+}
+
+#[test]
+fn stroke_order_shuffle_keeps_identity() {
+    let data = GameData::load().unwrap();
+    let mut shuffled = template_strokes_for_rune("light").unwrap();
+    shuffled.reverse();
+
+    let result = recognize_rune(&shuffled, unlocked_rank_one(&data)).unwrap();
+
+    assert_eq!(result.rune_id, "light", "{result:?}");
+    assert!(result.accepted, "{result:?}");
+}
+
+#[test]
+fn eraser_drops_sliver_fragments() {
+    let mut strokes = raw(&[&[
+        (0.20, 0.50),
+        (0.203, 0.50),
+        (0.206, 0.50),
+        (0.80, 0.50),
+    ]]);
+
+    let erased = erase_strokes_at(&mut strokes, StrokePoint::new(0.35, 0.50), 0.13);
+
+    assert!(erased);
+    assert_eq!(strokes.len(), 1, "{strokes:?}");
+    assert!(
+        strokes[0].points.iter().all(|point| point.x > 0.4),
+        "{strokes:?}"
+    );
+}
+
+#[test]
 fn eraser_splits_a_stroke_without_clearing_the_whole_mark() {
     let mut strokes = raw(&[&[(0.12, 0.50), (0.88, 0.50)]]);
 

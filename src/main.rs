@@ -3,6 +3,7 @@
 use macroquad::prelude::*;
 
 mod browser_clipboard;
+mod corpus;
 mod data;
 mod game;
 mod magical_circle;

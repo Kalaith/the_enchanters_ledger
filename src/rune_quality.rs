@@ -2,8 +2,8 @@
 
 use crate::data::RuneDef;
 use crate::rune_drawing::{
-    recognize_rune, shape_report_for_rune, template_strokes_for_rune, DrawnStroke, ShapeIssue,
-    StrokePoint, MIN_RECOGNITION_CONFIDENCE,
+    merge_continuation_strokes, recognize_rune, shape_report_for_rune, template_strokes_for_rune,
+    template_variants_for_rune, DrawnStroke, ShapeIssue, StrokePoint, MIN_RECOGNITION_CONFIDENCE,
 };
 
 #[derive(Debug, Clone)]
@@ -28,13 +28,39 @@ pub struct PracticeMismatchSegment {
 }
 
 pub fn strict_quality_for_rune(rune_id: &str, strokes: &[DrawnStroke]) -> Option<f32> {
-    let candidate = NormalizedDrawing::from_strokes(strokes)?;
-    let template = template_strokes_for_rune(rune_id)?;
-    let template = NormalizedDrawing::from_strokes(&template)?;
-    let shape_score = ordered_shape_score(&candidate, &template);
-    let start_score = start_point_score(&candidate, &template);
-    let stroke_order_score = stroke_order_score(&candidate, &template);
-    Some((shape_score * 0.46 + start_score * 0.22 + stroke_order_score * 0.32).clamp(0.0, 1.0))
+    best_variant_scores(rune_id, strokes).map(|scores| scores.quality)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StrictScores {
+    shape: f32,
+    start: f32,
+    order: f32,
+    quality: f32,
+}
+
+/// Scores the drawing against every accepted template variant and keeps the
+/// best fit, so strict quality agrees with recognition instead of punishing a
+/// legal variant for not matching the canonical stroke plan.
+fn best_variant_scores(rune_id: &str, strokes: &[DrawnStroke]) -> Option<StrictScores> {
+    let strokes = merge_continuation_strokes(strokes);
+    let candidate = NormalizedDrawing::from_strokes(&strokes)?;
+    template_variants_for_rune(rune_id)
+        .into_iter()
+        .filter_map(|template| {
+            let template = NormalizedDrawing::from_strokes(&template)?;
+            let shape = ordered_shape_score(&candidate, &template);
+            let start = start_point_score(&candidate, &template);
+            let order = stroke_order_score(&candidate, &template);
+            let quality = (shape * 0.46 + start * 0.22 + order * 0.32).clamp(0.0, 1.0);
+            Some(StrictScores {
+                shape,
+                start,
+                order,
+                quality,
+            })
+        })
+        .reduce(|best, next| if next.quality > best.quality { next } else { best })
 }
 
 pub fn practice_report_for_rune<'a>(
@@ -42,15 +68,12 @@ pub fn practice_report_for_rune<'a>(
     strokes: &[DrawnStroke],
     runes: impl IntoIterator<Item = &'a RuneDef>,
 ) -> Option<RunePracticeReport> {
-    let candidate = NormalizedDrawing::from_strokes(strokes)?;
-    let template = template_strokes_for_rune(rune_id)?;
-    let template = NormalizedDrawing::from_strokes(&template)?;
+    let scores = best_variant_scores(rune_id, strokes)?;
     let recognized = recognize_rune(strokes, runes);
-    let shape_score = ordered_shape_score(&candidate, &template);
-    let start_score = start_point_score(&candidate, &template);
-    let stroke_order_score = stroke_order_score(&candidate, &template);
-    let quality =
-        (shape_score * 0.46 + start_score * 0.22 + stroke_order_score * 0.32).clamp(0.0, 1.0);
+    let shape_score = scores.shape;
+    let start_score = scores.start;
+    let stroke_order_score = scores.order;
+    let quality = scores.quality;
     let read_rune_id = recognized.as_ref().map(|outcome| outcome.rune_id.clone());
     let confidence = recognized
         .as_ref()
@@ -462,6 +485,27 @@ mod tests {
 
         assert_eq!(recognized.rune_id, "sphere", "{recognized:?}");
         assert_eq!(report.accepted, recognized.accepted, "{report:?}");
+    }
+
+    #[test]
+    fn down_arrow_variant_earns_full_strict_quality() {
+        let data = GameData::load().unwrap();
+        let down_arrow = vec![DrawnStroke {
+            points: vec![
+                StrokePoint::new(0.50, 0.16),
+                StrokePoint::new(0.50, 0.84),
+                StrokePoint::new(0.34, 0.64),
+                StrokePoint::new(0.50, 0.84),
+                StrokePoint::new(0.66, 0.64),
+            ],
+        }];
+
+        let strict = strict_quality_for_rune("touch", &down_arrow).unwrap();
+        let report = practice_report_for_rune("touch", &down_arrow, rank_one(&data)).unwrap();
+
+        assert!(strict > 0.90, "strict={strict} report={report:?}");
+        assert!(report.accepted, "{report:?}");
+        assert!(report.stroke_order_score > 0.90, "{report:?}");
     }
 
     #[test]

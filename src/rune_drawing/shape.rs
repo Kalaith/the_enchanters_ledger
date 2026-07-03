@@ -405,24 +405,55 @@ fn circularity(points: &[StrokePoint], aspect_ratio: f32) -> f32 {
 }
 
 fn corner_count(points: &[StrokePoint]) -> usize {
-    let sampled = resample(points, 36);
-    if sampled.len() < 3 {
+    let mut sampled = resample(points, 36);
+    if sampled.len() < 5 {
         return 0;
     }
-    let mut count = 0;
-    let mut previous_was_corner = false;
-    for index in 0..sampled.len() {
-        let previous = sampled[(index + sampled.len() - 2) % sampled.len()];
-        let current = sampled[index];
-        let next = sampled[(index + 2) % sampled.len()];
-        let turn = turn_angle(previous, current, next);
-        let is_corner = turn > 0.68;
-        if is_corner && !previous_was_corner {
-            count += 1;
+    // Only closed strokes may wrap around the ends; wrapping an open stroke
+    // manufactures phantom corners at its endpoints.
+    let closed = sampled
+        .first()
+        .zip(sampled.last())
+        .is_some_and(|(first, last)| first.distance(*last) <= 0.18);
+    if closed {
+        // Drop the duplicated seam sample so a corner at the stroke's start
+        // point is not counted twice.
+        if sampled
+            .first()
+            .zip(sampled.last())
+            .is_some_and(|(first, last)| first.distance(*last) <= 0.01)
+        {
+            sampled.pop();
         }
-        previous_was_corner = is_corner;
+        let count = sampled.len();
+        // A regular polygon's turn angle is exact, but hand-authored templates
+        // (e.g. the hexagon "safer" rune) can have corners a little short of a
+        // right angle; 0.68 rad missed two of its six corners outright. Closed
+        // shapes get a lower bar than open strokes, whose corners tend to be
+        // sharper by construction (arrowheads, crosses).
+        let flags = (0..count)
+            .map(|index| {
+                let previous = sampled[(index + count - 2) % count];
+                let next = sampled[(index + 2) % count];
+                turn_angle(previous, sampled[index], next) > 0.60
+            })
+            .collect::<Vec<_>>();
+        let corners = flags
+            .iter()
+            .enumerate()
+            .filter(|(index, corner)| **corner && !flags[(index + count - 1) % count])
+            .count();
+        corners.max(usize::from(flags.iter().any(|corner| *corner)))
+    } else {
+        let flags = (2..sampled.len() - 2)
+            .map(|index| turn_angle(sampled[index - 2], sampled[index], sampled[index + 2]) > 0.68)
+            .collect::<Vec<_>>();
+        flags
+            .iter()
+            .enumerate()
+            .filter(|(index, corner)| **corner && (*index == 0 || !flags[index - 1]))
+            .count()
     }
-    count
 }
 
 fn straight_section_score(points: &[StrokePoint]) -> f32 {
@@ -691,4 +722,66 @@ fn stroke_length(points: &[StrokePoint]) -> f32 {
         .windows(2)
         .map(|segment| segment[0].distance(segment[1]))
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn points(raw: &[(f32, f32)]) -> Vec<StrokePoint> {
+        raw.iter().map(|(x, y)| StrokePoint::new(*x, *y)).collect()
+    }
+
+    #[test]
+    fn open_straight_line_has_no_corners() {
+        let line = points(&[(0.15, 0.20), (0.85, 0.80)]);
+
+        assert_eq!(corner_count(&line), 0);
+    }
+
+    #[test]
+    fn open_bend_counts_a_single_corner() {
+        let bend = points(&[(0.20, 0.20), (0.50, 0.80), (0.80, 0.20)]);
+
+        assert_eq!(corner_count(&bend), 1);
+    }
+
+    #[test]
+    fn closed_square_still_counts_four_corners() {
+        let square = points(&[
+            (0.20, 0.20),
+            (0.80, 0.20),
+            (0.80, 0.80),
+            (0.20, 0.80),
+            (0.20, 0.20),
+        ]);
+
+        assert_eq!(corner_count(&square), 4);
+    }
+
+    #[test]
+    fn closed_hexagon_counts_six_corners() {
+        // The "safer" rune template: a hand-authored hexagon whose corners
+        // aren't all equal-angle. Two of them fall short of a right angle,
+        // which previously fell below the corner threshold entirely and made
+        // the shape read as a 4-corner diamond ("force") instead.
+        let hexagon = points(&[
+            (0.50, 0.12),
+            (0.80, 0.26),
+            (0.74, 0.66),
+            (0.50, 0.88),
+            (0.26, 0.66),
+            (0.20, 0.26),
+            (0.50, 0.12),
+        ]);
+
+        assert_eq!(corner_count(&hexagon), 6);
+    }
+
+    #[test]
+    fn closed_diamond_still_counts_four_corners() {
+        let diamond = points(&[(0.50, 0.12), (0.86, 0.50), (0.50, 0.88), (0.14, 0.50), (0.50, 0.12)]);
+
+        assert_eq!(corner_count(&diamond), 4);
+    }
 }

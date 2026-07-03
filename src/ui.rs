@@ -92,6 +92,7 @@ pub enum UiAction {
     ClosePractice,
     ClearPractice,
     ScorePractice,
+    CaptureCorpusSample,
     StartPracticeStroke(StrokePoint),
     ExtendPracticeStroke(StrokePoint),
     FinishPracticeStroke,

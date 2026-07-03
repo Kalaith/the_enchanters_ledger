@@ -1,6 +1,6 @@
 use super::{DrawnStroke, StrokePoint};
 
-pub(super) fn template_variants_for_rune(rune_id: &str) -> Vec<Vec<DrawnStroke>> {
+pub(crate) fn template_variants_for_rune(rune_id: &str) -> Vec<Vec<DrawnStroke>> {
     let mut variants = template_strokes_for_rune(rune_id)
         .into_iter()
         .collect::<Vec<_>>();

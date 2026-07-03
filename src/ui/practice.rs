@@ -78,11 +78,20 @@ pub(super) fn draw_practice_overlay(ctx: &UiContext<'_>, mouse: Vec2, actions: &
     ) {
         actions.push(UiAction::ClearPractice);
     }
+    if virtual_button(
+        Rect::new(controls.x + 270.0, controls.y, 122.0, 32.0),
+        "Capture Sample",
+        !ctx.practice.strokes.is_empty() && ctx.practice.active_stroke.is_none(),
+        ButtonTone::Muted,
+        mouse,
+    ) {
+        actions.push(UiAction::CaptureCorpusSample);
+    }
     draw_text_block(
         "Quality affects rewards, stability, mana waste, and final ratings.",
-        controls.x + 282.0,
+        controls.x + 412.0,
         controls.y + 6.0,
-        controls.w - 282.0,
+        controls.w - 412.0,
         32.0,
         13.0,
         2.0,

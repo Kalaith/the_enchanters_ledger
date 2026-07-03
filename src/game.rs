@@ -286,6 +286,7 @@ impl Game {
                 self.practice.report = None;
             }
             UiAction::ScorePractice => self.score_practice(),
+            UiAction::CaptureCorpusSample => self.capture_corpus_sample(),
             UiAction::StartPracticeStroke(point) => {
                 self.practice.active_stroke = Some(DrawnStroke::new(point));
                 self.practice.report = None;
@@ -515,6 +516,34 @@ impl Game {
         } else {
             self.notifications
                 .info(format!("Practice quality {:.0}%.", quality * 100.0));
+        }
+    }
+
+    fn capture_corpus_sample(&mut self) {
+        let Some(rune_id) = self.session.board.selected_rune.clone() else {
+            self.notifications
+                .warning("Select a rune in the guide before capturing a sample.");
+            return;
+        };
+        if self.practice.strokes.is_empty() {
+            self.notifications.warning("The practice slate is blank.");
+            return;
+        }
+        let capture = crate::corpus::capture_corpus_sample(&rune_id, &self.practice.strokes);
+        let copy_result = copy_text(&capture.json);
+        match (capture.file_path, copy_result) {
+            (Some(path), _) => self
+                .notifications
+                .success(format!("Saved corpus sample to {path}.")),
+            (None, ClipboardCopy::Copied) => self
+                .notifications
+                .info("Copied corpus sample JSON — paste into tests/corpus/<rune>/."),
+            (None, ClipboardCopy::Requested) => self
+                .notifications
+                .info("Requested browser copy of the corpus sample JSON."),
+            (None, ClipboardCopy::Failed) => self
+                .notifications
+                .warning("Could not save or copy the corpus sample."),
         }
     }
 
