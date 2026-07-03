@@ -35,7 +35,12 @@ pub(crate) fn template_variants_for_rune(rune_id: &str) -> Vec<Vec<DrawnStroke>>
         return Vec::new();
     };
     std::iter::once(strokes_from_points(&entry.strokes))
-        .chain(entry.variants.iter().map(|variant| strokes_from_points(variant)))
+        .chain(
+            entry
+                .variants
+                .iter()
+                .map(|variant| strokes_from_points(variant)),
+        )
         .collect()
 }
 

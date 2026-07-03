@@ -171,8 +171,7 @@ fn circle_repaired_in_two_arcs_reads_as_sphere() {
     let mut right_arc = Vec::new();
     let mut left_arc = Vec::new();
     for index in 0..=12 {
-        let angle = -std::f32::consts::FRAC_PI_2
-            + std::f32::consts::PI * index as f32 / 12.0;
+        let angle = -std::f32::consts::FRAC_PI_2 + std::f32::consts::PI * index as f32 / 12.0;
         right_arc.push(StrokePoint::new(
             0.50 + 0.34 * angle.cos(),
             0.50 + 0.34 * angle.sin(),
@@ -237,12 +236,7 @@ fn stroke_order_shuffle_keeps_identity() {
 
 #[test]
 fn eraser_drops_sliver_fragments() {
-    let mut strokes = raw(&[&[
-        (0.20, 0.50),
-        (0.203, 0.50),
-        (0.206, 0.50),
-        (0.80, 0.50),
-    ]]);
+    let mut strokes = raw(&[&[(0.20, 0.50), (0.203, 0.50), (0.206, 0.50), (0.80, 0.50)]]);
 
     let erased = erase_strokes_at(&mut strokes, StrokePoint::new(0.35, 0.50), 0.13);
 
@@ -275,7 +269,11 @@ fn every_rune_has_a_data_driven_template() {
 
 #[test]
 fn touch_and_continuous_expose_their_extra_variants() {
-    assert_eq!(template_variants_for_rune("touch").len(), 3, "canonical + 2 variants");
+    assert_eq!(
+        template_variants_for_rune("touch").len(),
+        3,
+        "canonical + 2 variants"
+    );
     assert_eq!(
         template_variants_for_rune("continuous").len(),
         2,
@@ -332,8 +330,14 @@ fn acceptance_bands_are_ordered_practice_strictest_sandbox_most_lenient() {
     let commission = acceptance_band(RecognitionContext::Commission);
     let sandbox = acceptance_band(RecognitionContext::Sandbox);
 
-    assert!(practice.confidence > commission.confidence, "{practice:?} vs {commission:?}");
-    assert!(commission.confidence > sandbox.confidence, "{commission:?} vs {sandbox:?}");
+    assert!(
+        practice.confidence > commission.confidence,
+        "{practice:?} vs {commission:?}"
+    );
+    assert!(
+        commission.confidence > sandbox.confidence,
+        "{commission:?} vs {sandbox:?}"
+    );
     assert!(practice.margin > commission.margin);
     assert!(commission.margin > sandbox.margin);
     assert!(practice.ambiguous_confidence > commission.ambiguous_confidence);

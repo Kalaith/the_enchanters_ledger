@@ -61,7 +61,13 @@ fn best_variant_scores(rune_id: &str, strokes: &[DrawnStroke]) -> Option<StrictS
                 quality,
             })
         })
-        .reduce(|best, next| if next.quality > best.quality { next } else { best })
+        .reduce(|best, next| {
+            if next.quality > best.quality {
+                next
+            } else {
+                best
+            }
+        })
 }
 
 /// Scores a Practice-slate drawing (plan Phase 5 item 1): recognition itself is identical to
@@ -178,8 +184,10 @@ fn mismatch_segments_for_rune(
         .iter()
         .map(|stroke| stroke.points.clone())
         .collect();
-    let template_points: Vec<Vec<StrokePoint>> =
-        template.iter().map(|stroke| stroke.points.clone()).collect();
+    let template_points: Vec<Vec<StrokePoint>> = template
+        .iter()
+        .map(|stroke| stroke.points.clone())
+        .collect();
     let assignment = stroke_assignment(&candidate_points, &template_points);
 
     let mut matched = vec![false; inked_strokes.len()];

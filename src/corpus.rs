@@ -38,11 +38,20 @@ fn write_corpus_file(label: &str, json: &str) -> Option<String> {
 
     let safe_label: String = label
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let dir = format!("tests/corpus/{safe_label}");
     std::fs::create_dir_all(&dir).ok()?;
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_millis();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis();
     let path = format!("{dir}/{safe_label}_{stamp}.json");
     std::fs::write(&path, json).ok()?;
     Some(path)

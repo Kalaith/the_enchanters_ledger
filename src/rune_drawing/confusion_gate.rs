@@ -134,7 +134,13 @@ fn confusion_matrix_perturbations_recognize_their_own_rune() {
             if let Some(target_count) = case.resample_to {
                 sample = resample_density(&sample, target_count);
             }
-            sample = perturb(&sample, case.scale, case.translate, case.jitter_amp, case.seed);
+            sample = perturb(
+                &sample,
+                case.scale,
+                case.translate,
+                case.jitter_amp,
+                case.seed,
+            );
             total += 1;
 
             let outcome = recognize_rune(&sample, runes.iter().copied());

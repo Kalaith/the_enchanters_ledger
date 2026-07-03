@@ -853,7 +853,13 @@ mod tests {
 
     #[test]
     fn closed_diamond_still_counts_four_corners() {
-        let diamond = points(&[(0.50, 0.12), (0.86, 0.50), (0.50, 0.88), (0.14, 0.50), (0.50, 0.12)]);
+        let diamond = points(&[
+            (0.50, 0.12),
+            (0.86, 0.50),
+            (0.50, 0.88),
+            (0.14, 0.50),
+            (0.50, 0.12),
+        ]);
 
         assert_eq!(rounded_corners(&diamond), 4);
     }

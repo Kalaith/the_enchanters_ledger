@@ -205,8 +205,8 @@ impl GameSession {
         let mut power = placed
             .iter()
             .map(|placed| {
-                (placed.rune.power as f32 * (0.35 + placed.quality * 0.65) * placed.potency)
-                    .round() as i32
+                (placed.rune.power as f32 * (0.35 + placed.quality * 0.65) * placed.potency).round()
+                    as i32
             })
             .sum::<i32>();
         let mut stability = 48
@@ -261,7 +261,8 @@ impl GameSession {
         // checked against that vent's own rings/perimeter/safer-rune containment, separately
         // from the root circle's. `total_potency_excess` walks the whole scope tree; still a
         // first cut (see prd.md), not a fully balanced version.
-        let total_excess = scope_spell.map_or(0.0, |tree| total_potency_excess(tree, circle_quality));
+        let total_excess =
+            scope_spell.map_or(0.0, |tree| total_potency_excess(tree, circle_quality));
         stability -= (total_excess * 10.0).round() as i32;
 
         if let Some(spell) = circle_spell {

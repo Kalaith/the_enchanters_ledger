@@ -22,7 +22,9 @@ pub use board::{
 pub use save::migrate_save_value;
 use text::percent;
 pub use tutorial::TutorialStage;
-pub use work::{DiscoveryReward, JournalEntry, WorkOrderKind, DISCOVERY_INSIGHT, GUIDE_FREE_INSIGHT};
+pub use work::{
+    DiscoveryReward, JournalEntry, WorkOrderKind, DISCOVERY_INSIGHT, GUIDE_FREE_INSIGHT,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GamePhase {
@@ -425,17 +427,13 @@ impl GameSession {
             let message = self.player_hint(data).unwrap_or_else(|| {
                 "The diagram needs an enclosing circle before it can hold meaning.".to_owned()
             });
-            return self.reject_interpretation(
-                "No enclosing circle was readable.".to_owned(),
-                message,
-            );
+            return self
+                .reject_interpretation("No enclosing circle was readable.".to_owned(), message);
         }
         if !interpretation.accepted() {
             let circle_percent = percent(interpretation.circle_quality);
             let message = self.player_hint(data).unwrap_or_else(|| {
-                format!(
-                    "The circle reads at {circle_percent}%, but no inner rune is clear enough."
-                )
+                format!("The circle reads at {circle_percent}%, but no inner rune is clear enough.")
             });
             return self.reject_interpretation(
                 format!("Circle {circle_percent}%, but no inner rune was clear enough."),
@@ -480,7 +478,8 @@ impl GameSession {
             let node = node_for_diagram_center(rune.center, &occupied);
             occupied.insert(node);
             placed_nodes.push(node);
-            self.board.place(node, &rune.rune_id, rune.quality, rune.potency);
+            self.board
+                .place(node, &rune.rune_id, rune.quality, rune.potency);
             // Mastery (plan Phase 5 item 2): every accepted read counts, not just delivered
             // commissions — Sandbox builds the same skill history as commissioned work, since
             // both read with the same recognizer, just different acceptance bands (item 1).

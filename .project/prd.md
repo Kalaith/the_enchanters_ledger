@@ -11,7 +11,7 @@
 > `src/rune_drawing/property_tests.rs`, or `tests/corpus/`.
 >
 > Written as Phase 0 of `.project/magic-symbol-system-plan.md`, updated
-> through Phase 5 (the plan's final phase). It documents the system **as it
+> through Phase 6 (the plan's final phase). It documents the system **as it
 > exists today**: Hungarian
 > stroke assignment, open-stroke corner fix, eraser-fragment merge,
 > strict/identity variant parity, deterministic tie-breaks, mismatch-segment
@@ -26,10 +26,12 @@
 > spatial (not draw-order) stroke grouping (§5), a compositional spell tree
 > with named spells as data-defined recipes (`assets/data/recipes.json`),
 > diminishing-returns structural scoring, a recursive per-scope containment
-> budget, cause-specific backfire messaging (§8), and — as of Phase 5 —
-> per-context acceptance bands (Practice/Commission/Sandbox), a rune-mastery
-> history that fades guide aids over time, specific player-facing rejection
-> hints, and story-pacing verification (§9).
+> budget, cause-specific backfire messaging (§8), per-context acceptance
+> bands (Practice/Commission/Sandbox), a rune-mastery history that fades
+> guide aids over time, specific player-facing rejection hints, and
+> story-pacing verification (§9), and — as of Phase 6 — a size-swept
+> synthetic round-trip test and a CLI diagnostic replay tool for fast tuning
+> loops (§10).
 > It is not a design proposal — Phase 1's
 > generic/data-driven *structural checks* — as opposed to template shapes,
 > which are already data-driven — remain future work; see §2.3. This doc
@@ -49,11 +51,13 @@ scale from a 3-symbol fireball to a 100+-symbol grand diagram (see the plan
 document's goal statement). Single-symbol recognition (§2–3), the magnitude
 channel (§4), scaling a structured circle to hundreds of small symbols
 (§5), a compositional grammar (named spells as data-defined predicates over
-the diagram, §8), and — as of Phase 5 — progression and aids for story mode
-(per-context acceptance bands, a fading mastery/guide system, player-facing
-failure hints, and story-pacing verification, §9) are all in place. What's
-left is a fully-balanced containment budget (still a documented first cut,
-§8.3) and the deferred items each phase above already calls out explicitly.
+the diagram, §8), progression and aids for story mode (per-context
+acceptance bands, a fading mastery/guide system, player-facing failure
+hints, and story-pacing verification, §9), and continuous scale/tuning
+verification (a jittered synthetic round-trip sweep and a CLI diagnostic
+replay tool, §10) are all in place. What's left is a fully-balanced
+containment budget (still a documented first cut, §8.3) and the deferred
+items each phase above already calls out explicitly.
 
 ### 1.2 Vocabulary
 
@@ -799,6 +803,13 @@ alongside it.
   and the pre-existing `high_tier_circle_strengthens_city_shield_commission`
   are §9.4's pacing exit criteria (early commissions tolerate a jittered
   hand; a late commission drawn with real structure reaches `Brilliant`).
+- **Phase 6.** `rune_diagram::tests::synthetic_diagram_round_trips_across_sizes_with_jitter`
+  is §10.1's exit criterion — a jittered synthetic diagram round-trips at
+  every size from 3 up through 300. `main::cli_tests` (three unit tests:
+  bare stroke list, `CorpusSample`, missing file) guards §10.3's CLI replay
+  tool. §10.2 has no test of its own — it's the standing CI configuration
+  (`.github/workflows/rust-ci.yml`) already exercising every test above on
+  every push and PR.
 
 Any change to a constant in §6 should keep all of the above green, or the
 affected sentence in this document (and, if it's a tracked confusion, the
@@ -1105,7 +1116,79 @@ today, only rewards it if it is.
 
 ---
 
-*Last updated: 2026-07-04 — Phase 0 through Phase 5 of
+## 10. Verification at scale (Phase 6)
+
+Phase 6 is the plan's last phase, and — per its own heading — "continuous"
+rather than one-off feature work: keep the existing regression wall broad
+and green, extend it to a size sweep, and keep a fast offline tuning loop
+available.
+
+### 10.1 Size-swept synthetic round-trip test
+
+`rune_diagram::tests::synthetic_diagram_round_trips_across_sizes_with_jitter`
+extends the pre-existing single-size
+`hundred_plus_symbol_diagram_round_trips_within_perf_budget_and_order_independence`
+(§5.6, §7) — which stays exactly as-is, since it's also the order-independence
+exit criterion — with a size sweep from 3 up through 300 `spark` instances
+(`[3, 10, 30, 60, 120, 200, 300]`), each placed via a new `jittered_rune_grid`
+helper. Every instance is perturbed with `rune_drawing::test_support::perturb`
+(the same helper §9.4's degraded-corpus test and the confusion-matrix gate
+use), with `jitter_amp` scaled to that instance's own on-canvas `scale`
+rather than a fixed absolute amplitude — a fixed amplitude tuned for one
+size (à la `confusion_gate.rs`'s `jitter_a`, perturbing a template at its
+own natural, unscaled size) is proportionally far too large once the sweep
+reaches its smaller, more tightly-packed sizes. Spacing and scale both
+tighten at the larger sizes so more instances fit inside the working circle
+while staying distinct clusters under §5.6's scale-relative clustering
+floors. Every size in the sweep — including 300, the plan's own upper
+target — round-trips: every symbol found, none merged or lost, all read as
+`spark`, within the same generous debug-`cargo test` perf bound the existing
+120-symbol test already uses (not a release-mode benchmark).
+
+### 10.2 Confusion matrix + corpus + property tests stay green — already continuous
+
+No code change needed. `.github/workflows/rust-ci.yml`'s `checks-and-webgl`
+job already runs `cargo test --all-features` — which includes
+`rune_drawing::confusion_gate`, `corpus::tests::every_corpus_sample_recognizes_as_its_label`,
+and `rune_drawing::property_tests` — on every push and pull request. This
+exit criterion has been continuously true since Phase 0 introduced the CI
+workflow; Phase 6 simply records it as the phase's own verification
+requirement rather than treating it as new work.
+
+### 10.3 Fast tuning-loop replay tool
+
+The crate is binary-only (`src/main.rs`, no `src/lib.rs`, no
+`[[example]]`/`examples/` in `Cargo.toml`), so a literal `cargo run
+--example` would require a lib/bin split purely to let an example crate see
+`crate::rune_diagnostics` and friends — invasive for a dev-convenience tool.
+The plan text itself offers an alternative ("or debug screen"), so Phase 6
+instead adds a CLI branch directly to `main()` (`src/main.rs`):
+`cargo run -- --diagnose <path.json>` reads a JSON file, tries parsing it as
+a `corpus::CorpusSample` (`{label, strokes}`, the exact shape
+`capture_corpus_sample` already writes to `tests/corpus/`) and falls back to
+a bare `Vec<DrawnStroke>` if that fails, then calls
+`rune_diagnostics::diagnose_diagram` and prints the log to stdout — no game
+window opens for this path.
+
+Because `main.rs` is the crate root, every item this needs
+(`corpus::CorpusSample`, `data::GameData`, `rune_diagnostics::diagnose_diagram`,
+`rune_drawing::DrawnStroke`) is already visible with no visibility changes.
+`#[macroquad::main(window_conf)]` is intentionally not used on `main` itself
+— its macro expansion creates the game window (`Window::from_config(conf,
+amain())`) before any user code runs, which the CLI branch must skip
+entirely. `main` is now a plain `fn` that checks for `--diagnose` first and
+returns before ever touching macroquad if present, otherwise falling
+through to the exact `Window::from_config(window_conf(), amain())` call the
+attribute would have generated (the async body itself, unchanged, was
+renamed from `main` to `amain` to make room). The parse-and-diagnose logic
+lives in a separate `run_diagnose_cli(path) -> Result<String, String>`, kept
+free of `env::args()`/`process::exit` so it's directly unit-testable —
+`main::cli_tests` covers a bare stroke list, a `CorpusSample`, and a missing
+file.
+
+---
+
+*Last updated: 2026-07-04 — Phase 0 through Phase 6 of
 `.project/magic-symbol-system-plan.md` (the plan's final phase).
 Phase 1 remaining: generalize the structural-check layer (§2.3) into
 data-driven rules. Phase 2 remaining: none of the plan's four items are
@@ -1118,4 +1201,9 @@ was not attempted; backfire messaging covers three causes, not every broken
 rule; containment-budget coefficients are still a first cut. Phase 5
 remaining (§9.1): Sandbox reuses the commission slate's UI rather than
 getting its own screen/reference panel; no new pacing content was authored,
-only verification of the existing curve.*
+only verification of the existing curve. Phase 6 remaining (§10.1): the
+size sweep's perf bound is the same generous debug-build sanity check every
+earlier phase used, not the plan's own native-release ~100ms budget (a
+`--release` benchmark, not attempted here); the tuning-loop CLI prints to
+stdout only, with no in-repo corpus samples yet to replay against beyond
+what a developer captures locally via the in-game "Capture Sample" button.*

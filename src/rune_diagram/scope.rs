@@ -108,7 +108,13 @@ pub(crate) fn interpret_scope(
                 // `classified_marks` above).
                 continue;
             }
-            let sub = interpret_scope(&nested_ink, ring_bounds, available_runes, depth + 1, context);
+            let sub = interpret_scope(
+                &nested_ink,
+                ring_bounds,
+                available_runes,
+                depth + 1,
+                context,
+            );
             rejected_marks += sub.rejected_marks;
             sub_scopes.push(sub);
             consumed.push(ring_index);

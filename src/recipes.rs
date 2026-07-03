@@ -114,7 +114,10 @@ mod tests {
     fn potency_sums_across_sub_scopes_for_min_potency() {
         let root = ScopeSpell {
             effects: vec![("fire".to_owned(), 1.0)],
-            sub_scopes: vec![scope_with_effect("fire", 1.0), scope_with_effect("fire", 1.0)],
+            sub_scopes: vec![
+                scope_with_effect("fire", 1.0),
+                scope_with_effect("fire", 1.0),
+            ],
             ..Default::default()
         };
         let recipes = [recipe("hot", 1, effect_req("fire", 2.5))];
@@ -163,10 +166,7 @@ mod tests {
     #[test]
     fn structure_and_sub_scope_requirements_gate_a_volcano_style_recipe() {
         let requires = RecipeRequirements {
-            effect: HashMap::from([(
-                "fire".to_owned(),
-                EffectRequirement { min_potency: 2.0 },
-            )]),
+            effect: HashMap::from([("fire".to_owned(), EffectRequirement { min_potency: 2.0 })]),
             shape: Some("cone".to_owned()),
             trigger: Some("continuous".to_owned()),
             structure: StructureRequirement {

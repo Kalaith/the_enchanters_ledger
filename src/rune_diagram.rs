@@ -14,7 +14,9 @@ mod scope;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use circle::{gather_circle_candidates, is_inside_working_circle, select_working_circle_for_strokes};
+pub(crate) use circle::{
+    gather_circle_candidates, is_inside_working_circle, select_working_circle_for_strokes,
+};
 pub(crate) use geometry::{cluster_strokes, StrokeBounds};
 use scope::{build_scope_spell, flatten_runes, interpret_scope};
 

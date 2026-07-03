@@ -61,8 +61,14 @@ fn point_density_does_not_change_identity() {
         for density in [20usize, 60] {
             let resampled = resample_density(&template, density);
             let outcome = recognize_rune(&resampled, runes.iter().copied()).unwrap();
-            assert_eq!(outcome.rune_id, baseline.rune_id, "id={id} density={density}");
-            assert!(outcome.accepted, "id={id} density={density} outcome={outcome:?}");
+            assert_eq!(
+                outcome.rune_id, baseline.rune_id,
+                "id={id} density={density}"
+            );
+            assert!(
+                outcome.accepted,
+                "id={id} density={density} outcome={outcome:?}"
+            );
         }
     }
 }
@@ -162,7 +168,13 @@ fn quality_is_stable_under_one_percent_jitter() {
         let baseline = recognize_rune(&template, runes.iter().copied()).unwrap();
 
         for seed in 0..5u64 {
-            let jittered = perturb(&template, 1.0, (0.0, 0.0), ONE_PERCENT_JITTER, seed * 61 + 3);
+            let jittered = perturb(
+                &template,
+                1.0,
+                (0.0, 0.0),
+                ONE_PERCENT_JITTER,
+                seed * 61 + 3,
+            );
             let outcome = recognize_rune(&jittered, runes.iter().copied()).unwrap();
             assert_eq!(outcome.rune_id, baseline.rune_id, "id={id} seed={seed}");
             assert!(

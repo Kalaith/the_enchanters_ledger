@@ -203,7 +203,10 @@ pub(crate) fn stroke_assignment(
 
 /// Exact best-total pairing of template strokes to distinct candidate strokes.
 /// Greedy pairing flips on near-ties, so a tiny redraw could change the score.
-fn optimal_assignment(similarity: &[Vec<f32>], candidate_count: usize) -> Vec<(Option<usize>, f32)> {
+fn optimal_assignment(
+    similarity: &[Vec<f32>],
+    candidate_count: usize,
+) -> Vec<(Option<usize>, f32)> {
     let template_count = similarity.len();
     let mask_count = 1usize << candidate_count;
     let mut best = vec![vec![f32::NEG_INFINITY; mask_count]; template_count + 1];

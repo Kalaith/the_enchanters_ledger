@@ -514,8 +514,7 @@ impl Game {
             .runes
             .iter()
             .filter(|rune| self.session.can_use_rune(rune));
-        let Some(report) = practice_report_for_rune(&rune_id, &self.practice.strokes, runes)
-        else {
+        let Some(report) = practice_report_for_rune(&rune_id, &self.practice.strokes, runes) else {
             self.notifications
                 .warning("The practice mark is too faint to score.");
             return;

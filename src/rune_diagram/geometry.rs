@@ -27,7 +27,12 @@ const MIN_CLUSTER_STROKE_DISTANCE: f32 = 0.009;
 /// instead of everything sharing one slate-absolute distance. See the factor constants above for
 /// why the open/closed split exists and why each picks a different one of the pair's diagonals.
 /// Floored so degenerate near-zero-size strokes don't collapse the threshold to 0.
-fn cluster_thresholds(a: &DrawnStroke, a_bounds: StrokeBounds, b: &DrawnStroke, b_bounds: StrokeBounds) -> (f32, f32) {
+fn cluster_thresholds(
+    a: &DrawnStroke,
+    a_bounds: StrokeBounds,
+    b: &DrawnStroke,
+    b_bounds: StrokeBounds,
+) -> (f32, f32) {
     let either_closed = is_closed_stroke(a, a_bounds) || is_closed_stroke(b, b_bounds);
     // A closed shape enclosing the other stroke (e.g. `aura`'s hexagon ring around its own
     // crossbar, `fire`'s loop around its own inner squiggle) is still one multi-stroke rune, not
@@ -109,13 +114,21 @@ pub(crate) fn cluster_strokes(strokes: &[(usize, DrawnStroke)]) -> Vec<StrokeClu
     let edges = candidate_pairs(&items)
         .into_iter()
         .filter(|(left, right)| {
-            strokes_should_cluster(&items[*left].1, items[*left].2, &items[*right].1, items[*right].2)
+            strokes_should_cluster(
+                &items[*left].1,
+                items[*left].2,
+                &items[*right].1,
+                items[*right].2,
+            )
         })
-        .fold(vec![Vec::<usize>::new(); items.len()], |mut edges, (left, right)| {
-            edges[left].push(right);
-            edges[right].push(left);
-            edges
-        });
+        .fold(
+            vec![Vec::<usize>::new(); items.len()],
+            |mut edges, (left, right)| {
+                edges[left].push(right);
+                edges[right].push(left);
+                edges
+            },
+        );
 
     let mut visited = vec![false; items.len()];
     let mut clusters = Vec::<StrokeCluster>::new();
@@ -185,7 +198,10 @@ fn candidate_pairs(items: &[(usize, DrawnStroke, StrokeBounds)]) -> Vec<(usize, 
 
     let mut buckets: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (item_index, (_, _, bounds)) in items.iter().enumerate() {
-        buckets.entry(cell_of(bounds.center(), cell_size)).or_default().push(item_index);
+        buckets
+            .entry(cell_of(bounds.center(), cell_size))
+            .or_default()
+            .push(item_index);
     }
 
     let mut pairs = Vec::new();

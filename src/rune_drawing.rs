@@ -9,8 +9,8 @@ mod scoring;
 mod shape;
 mod templates;
 
-use scoring::{adjusted_score_for_rune, NormalizedDrawing};
 pub(crate) use scoring::stroke_assignment;
+use scoring::{adjusted_score_for_rune, NormalizedDrawing};
 pub(crate) use shape::{shape_report_for_rune, ShapeIssue};
 #[cfg(test)]
 pub(crate) use templates::raw;
@@ -496,10 +496,10 @@ fn densify_points(points: &[StrokePoint], max_gap: f32) -> Vec<StrokePoint> {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
-pub(crate) mod test_support;
-#[cfg(test)]
 mod confusion_gate;
 #[cfg(test)]
 mod property_tests;
+#[cfg(test)]
+pub(crate) mod test_support;
+#[cfg(test)]
+mod tests;

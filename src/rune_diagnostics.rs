@@ -4,8 +4,8 @@ use crate::data::{GameData, RuneDef};
 use crate::magical_circle::{classify_circle_stroke, CircleBounds};
 use crate::rune_diagram::{
     cluster_strokes, gather_circle_candidates, interpret_diagram, is_circle_structure,
-    is_inside_working_circle, select_working_circle_for_strokes, StrokeBounds,
-    MIN_CIRCLE_QUALITY, MIN_DIAGRAM_RUNE_CONFIDENCE,
+    is_inside_working_circle, select_working_circle_for_strokes, StrokeBounds, MIN_CIRCLE_QUALITY,
+    MIN_DIAGRAM_RUNE_CONFIDENCE,
 };
 use crate::rune_drawing::{recognize_rune, DrawnStroke};
 use crate::state::GameSession;
@@ -270,7 +270,11 @@ pub fn player_hint<'a>(
         .filter_map(|cluster| {
             let guess = recognize_rune(&cluster.strokes, available_runes.iter().copied())?;
             let alt = guess.alternatives.first()?;
-            (guess.ambiguous || !guess.accepted).then_some((guess.rune_id, alt.rune_id.clone(), guess.score_gap))
+            (guess.ambiguous || !guess.accepted).then_some((
+                guess.rune_id,
+                alt.rune_id.clone(),
+                guess.score_gap,
+            ))
         })
         .min_by(|a, b| a.2.total_cmp(&b.2));
     if let Some((best, alt, gap)) = worst_ambiguity {

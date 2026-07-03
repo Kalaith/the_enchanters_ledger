@@ -595,7 +595,10 @@ fn early_commissions_still_clear_acceptance_when_drawn_with_a_degraded_hand() {
         session.board.drawing_strokes = degraded_circled_order(commission);
 
         session.interpret_drawing(&data).unwrap_or_else(|error| {
-            panic!("{} failed to interpret when drawn with jitter: {error}", commission.id)
+            panic!(
+                "{} failed to interpret when drawn with jitter: {error}",
+                commission.id
+            )
         });
         let report = session.test_design(&data);
         assert!(
@@ -607,7 +610,8 @@ fn early_commissions_still_clear_acceptance_when_drawn_with_a_degraded_hand() {
             report.result.grade,
             EnchantGrade::Failed,
             "{} graded Failed once jittered: {:?}",
-            commission.id, report.result
+            commission.id,
+            report.result
         );
     }
 }
@@ -657,7 +661,10 @@ fn backfire_message_names_uncontained_potency() {
     let report = session.test_design(&data);
 
     assert!(
-        report.result.side_effect.contains("can't hold everything drawn"),
+        report
+            .result
+            .side_effect
+            .contains("can't hold everything drawn"),
         "{:?}",
         report.result
     );
@@ -986,7 +993,13 @@ fn template_at(rune_id: &str, cx: f32, cy: f32, scale: f32) -> Vec<DrawnStroke> 
 /// wobble plus per-point noise — applied to a clean template before it is
 /// placed on the slate. Reuses `perturb`, the same seeded jitter the
 /// confusion-matrix gate (`rune_drawing::confusion_gate`) already exercises.
-fn jittered_template_at(rune_id: &str, cx: f32, cy: f32, scale: f32, seed: u64) -> Vec<DrawnStroke> {
+fn jittered_template_at(
+    rune_id: &str,
+    cx: f32,
+    cy: f32,
+    scale: f32,
+    seed: u64,
+) -> Vec<DrawnStroke> {
     let raw = template_strokes_for_rune(rune_id).unwrap();
     let degraded = perturb(&raw, 0.85, (0.02, -0.02), 0.015, seed);
     degraded
@@ -1005,9 +1018,27 @@ fn jittered_template_at(rune_id: &str, cx: f32, cy: f32, scale: f32, seed: u64) 
 
 fn degraded_circled_order(order: &CommissionDef) -> Vec<DrawnStroke> {
     let mut strokes = outer_circle();
-    strokes.extend(jittered_template_at(&order.required_effect, 0.26, 0.50, 0.18, 11));
-    strokes.extend(jittered_template_at(&order.required_shape, 0.50, 0.50, 0.18, 22));
-    strokes.extend(jittered_template_at(&order.required_trigger, 0.74, 0.50, 0.18, 33));
+    strokes.extend(jittered_template_at(
+        &order.required_effect,
+        0.26,
+        0.50,
+        0.18,
+        11,
+    ));
+    strokes.extend(jittered_template_at(
+        &order.required_shape,
+        0.50,
+        0.50,
+        0.18,
+        22,
+    ));
+    strokes.extend(jittered_template_at(
+        &order.required_trigger,
+        0.74,
+        0.50,
+        0.18,
+        33,
+    ));
     strokes
 }
 
@@ -1070,12 +1101,7 @@ fn sandbox_mode_accepts_a_weak_circle_commission_mode_rejects() {
     commission.board.drawing_strokes = strokes.clone();
     let _ = commission.interpret_drawing(&data); // expected to Err: circle too weak to accept
     assert!(
-        !commission
-            .board
-            .last_diagram
-            .as_ref()
-            .unwrap()
-            .circle_found,
+        !commission.board.last_diagram.as_ref().unwrap().circle_found,
         "{:?}",
         commission.board.last_diagram
     );
@@ -1097,7 +1123,10 @@ fn weak_partial_circle() -> Vec<DrawnStroke> {
     let mut points = Vec::new();
     for index in 0..=28 {
         let angle = std::f32::consts::TAU * 0.6 * index as f32 / 28.0;
-        points.push(StrokePoint::new(0.60 + 0.32 * angle.cos(), 0.60 + 0.16 * angle.sin()));
+        points.push(StrokePoint::new(
+            0.60 + 0.32 * angle.cos(),
+            0.60 + 0.16 * angle.sin(),
+        ));
     }
     vec![DrawnStroke { points }]
 }

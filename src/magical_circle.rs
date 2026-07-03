@@ -160,8 +160,10 @@ pub fn classify_circle_stroke(stroke: &DrawnStroke, circle: CircleBounds) -> Opt
     // entirely) purely by being small and numerous — exactly the "structure vs. rune ink by
     // size" failure mode the plan calls out.
     let directness = if stroke.points.len() >= 2 {
-        distance(*stroke.points.first().unwrap(), *stroke.points.last().unwrap())
-            / stroke_length(&stroke.points).max(0.001)
+        distance(
+            *stroke.points.first().unwrap(),
+            *stroke.points.last().unwrap(),
+        ) / stroke_length(&stroke.points).max(0.001)
     } else {
         0.0
     };
