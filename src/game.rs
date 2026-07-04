@@ -94,6 +94,19 @@ impl Game {
         game
     }
 
+    /// Seed a specific scene for the screenshot harness (see
+    /// `docs/screenshot_capture_harness_guide.md`).
+    pub fn begin_capture_scene(&mut self, scene: &str) {
+        match scene {
+            "title" => self.session.phase = GamePhase::Title,
+            "naming" => self.session.phase = GamePhase::Naming,
+            _ => {
+                // Default: jump straight into the workshop gameplay screen.
+                self.session.start_playing();
+            }
+        }
+    }
+
     pub fn update(&mut self, dt: f32) {
         self.notifications.update(dt);
         self.session.update_focus(&self.data.config, dt);

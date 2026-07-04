@@ -1,6 +1,7 @@
 //! The Enchanter's Ledger.
 
 use macroquad::prelude::*;
+use macroquad_toolkit::capture;
 
 mod browser_clipboard;
 mod corpus;
@@ -18,14 +19,12 @@ mod ui;
 use game::Game;
 
 fn window_conf() -> Conf {
-    Conf {
-        window_title: "The Enchanter's Ledger".to_owned(),
-        window_width: ui::LOGICAL_WIDTH as i32,
-        window_height: ui::LOGICAL_HEIGHT as i32,
-        window_resizable: true,
-        high_dpi: true,
-        ..Default::default()
-    }
+    capture::capture_window_conf(
+        "THE_ENCHANTERS_LEDGER",
+        "The Enchanter's Ledger",
+        ui::LOGICAL_WIDTH as i32,
+        ui::LOGICAL_HEIGHT as i32,
+    )
 }
 
 /// Phase 6 item 3: a fast tuning-loop entry point that replays a corpus/diagram JSON file
@@ -85,6 +84,18 @@ async fn amain() {
     macroquad_toolkit::ui::set_min_ui_font_size(16.0);
 
     let mut game = Game::new().await;
+
+    // Screenshot harness: when THE_ENCHANTERS_LEDGER_CAPTURE_PATH is set, seed
+    // a scene, simulate deterministic frames, write a PNG, and exit.
+    if let Some(config) = capture::CaptureConfig::from_env("THE_ENCHANTERS_LEDGER") {
+        game.begin_capture_scene(&config.scene);
+        capture::run_capture(&config, |dt| {
+            game.update(dt);
+            game.draw();
+        })
+        .await;
+        return;
+    }
 
     loop {
         let dt = get_frame_time().min(0.1);
