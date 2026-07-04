@@ -16,8 +16,8 @@ pub(super) fn draw_ledger_panel(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut 
 
     let pad = 18.0;
     let gap = 18.0;
-    let left = Rect::new(rect.x + pad, rect.y + 16.0, 374.0, 72.0);
-    draw_last_result(ctx.session, left);
+    let left = Rect::new(rect.x + pad, rect.y + 12.0, 460.0, 84.0);
+    draw_diagram_status(ctx, left);
 
     let right_w = 294.0;
     let right = Rect::new(rect.right() - pad - right_w, rect.y + 16.0, right_w, 72.0);
@@ -78,42 +78,121 @@ pub(super) fn draw_ledger_panel(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut 
     );
 }
 
-fn draw_last_result(session: &GameSession, rect: Rect) {
+/// Single home for "how good is my current diagram": the Interpret read (top row) and the last
+/// Test result (bottom rows). Previously the Interpret read lived inline in the drafting panel,
+/// where it overlapped the button strip; consolidating both here removes that duplication.
+fn draw_diagram_status(ctx: &UiContext<'_>, rect: Rect) {
+    let board = &ctx.session.board;
+
+    // Row A — Interpretation (result of the "Interpret" button).
     draw_ui_text_ex(
-        "Last Test",
+        "Interpretation",
         rect.x,
-        rect.y + 15.0,
-        TextStyle::new(15.0, parchment()).params(),
+        rect.y + 14.0,
+        TextStyle::new(14.0, parchment()).params(),
     );
-    if let Some(result) = &session.board.last_evaluation {
-        let grade_color = grade_color(result.grade);
-        draw_badge(
-            Rect::new(rect.x + 82.0, rect.y, 96.0, 24.0),
-            result.grade.label(),
-            grade_color,
-            parchment(),
-        );
+    if let Some(note) = &board.last_interpretation_note {
         draw_text_block(
-            &format!(
-                "{} | Power {} | Stability {} | Mana {} | {}",
-                result.title, result.power, result.stability, result.mana_cost, result.side_effect
-            ),
-            rect.x,
-            rect.y + 30.0,
-            rect.w,
-            42.0,
+            note,
+            rect.x + 120.0,
+            rect.y + 3.0,
+            rect.w - 120.0,
+            20.0,
             13.0,
             2.0,
             Color::new(0.78, 0.83, 0.80, 1.0),
         );
+    } else if let Some(diagram) = &board.last_diagram {
+        let names = diagram
+            .runes
+            .iter()
+            .take(3)
+            .map(|rune| ctx.data.rune_name(&rune.rune_id).to_owned())
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let names = if names.is_empty() {
+            "No clear runes".to_owned()
+        } else {
+            names
+        };
+        draw_text_block(
+            &format!(
+                "{} | circle {}% | potency {}%",
+                names,
+                (diagram.circle_quality * 100.0).round() as i32,
+                (diagram.average_rune_potency() * 100.0).round() as i32
+            ),
+            rect.x + 120.0,
+            rect.y + 3.0,
+            rect.w - 120.0,
+            20.0,
+            13.0,
+            2.0,
+            if diagram.accepted() {
+                Color::new(0.42, 0.72, 0.50, 1.0)
+            } else {
+                Color::new(0.80, 0.52, 0.44, 1.0)
+            },
+        );
+    } else {
+        draw_text_block(
+            "Awaiting interpretation.",
+            rect.x + 120.0,
+            rect.y + 3.0,
+            rect.w - 120.0,
+            20.0,
+            13.0,
+            2.0,
+            Color::new(0.62, 0.66, 0.64, 1.0),
+        );
+    }
+
+    // Row B — Last Test (result of the "Test Diagram" button), with side-effect flavor wrapped
+    // onto its own line so it no longer truncates mid-sentence.
+    draw_ui_text_ex(
+        "Last Test",
+        rect.x,
+        rect.y + 40.0,
+        TextStyle::new(14.0, parchment()).params(),
+    );
+    if let Some(result) = &board.last_evaluation {
+        draw_badge(
+            Rect::new(rect.x + 82.0, rect.y + 27.0, 84.0, 22.0),
+            result.grade.label(),
+            grade_color(result.grade),
+            parchment(),
+        );
+        draw_text_block(
+            &format!(
+                "Power {} · Stability {} · Mana {}",
+                result.power, result.stability, result.mana_cost
+            ),
+            rect.x + 176.0,
+            rect.y + 29.0,
+            rect.w - 176.0,
+            20.0,
+            13.0,
+            2.0,
+            Color::new(0.78, 0.83, 0.80, 1.0),
+        );
+        draw_text_block(
+            &result.side_effect,
+            rect.x,
+            rect.y + 52.0,
+            rect.w,
+            30.0,
+            12.0,
+            2.0,
+            muted_ink(),
+        );
     } else {
         draw_text_block(
             "No diagram has been tested today.",
-            rect.x,
-            rect.y + 32.0,
-            rect.w,
+            rect.x + 82.0,
+            rect.y + 31.0,
+            rect.w - 82.0,
             24.0,
-            14.0,
+            13.0,
             2.0,
             Color::new(0.62, 0.66, 0.64, 1.0),
         );

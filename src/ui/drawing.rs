@@ -3,14 +3,13 @@ use super::canvas::{
     ERASER_RADIUS_PIXELS,
 };
 use super::widgets::{
-    ink, mouse_over_rect, muted_ink, parchment_line, parchment_page, virtual_button,
+    mouse_over_rect, muted_ink, parchment_line, parchment_page, virtual_button,
 };
 use super::{UiAction, UiContext};
 use crate::rune_drawing::{template_strokes_for_rune, StrokePoint};
 use crate::state::{GuideTemplate, RuneMastery};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
-use macroquad_toolkit::ui::draw_ui_text_ex;
 use std::collections::HashMap;
 
 const INK_THICKNESS: f32 = 5.0;
@@ -21,18 +20,14 @@ pub(super) fn draw_drawing_slate(
     mouse: Vec2,
     actions: &mut Vec<UiAction>,
 ) {
-    let slate = Rect::new(rect.x, rect.y + 24.0, rect.w, rect.h - 92.0);
+    // The panel title ("Drawn Diagram") already names this surface, so the slate starts near the
+    // top edge; height grows to keep the same bottom, leaving the controls strip unchanged.
+    let slate = Rect::new(rect.x, rect.y + 4.0, rect.w, rect.h - 72.0);
     let controls = Rect::new(
         rect.x,
         slate.bottom() + 12.0,
         rect.w,
         rect.bottom() - slate.bottom() - 12.0,
-    );
-    draw_ui_text_ex(
-        "Diagram Slate",
-        rect.x,
-        rect.y + 16.0,
-        TextStyle::new(15.0, ink()).params(),
     );
     draw_surface(
         slate,
@@ -202,6 +197,8 @@ pub(super) fn draw_drawing_slate(
         2.0,
         muted_ink(),
     );
+    // Gameplay actions first; the interpret/test result now lives in the ledger status block, so
+    // the strip is buttons only and no longer overflows the panel edge.
     if virtual_button(
         Rect::new(controls.x, controls.y + 34.0, 110.0, 26.0),
         "Interpret",
@@ -238,16 +235,7 @@ pub(super) fn draw_drawing_slate(
         actions.push(UiAction::ToggleGuideEditMode);
     }
     if virtual_button(
-        Rect::new(controls.x + 328.0, controls.y + 34.0, 64.0, 26.0),
-        "Diag",
-        !drawing_active,
-        ButtonTone::Primary,
-        mouse,
-    ) {
-        actions.push(UiAction::CopyDiagnostics);
-    }
-    if virtual_button(
-        Rect::new(controls.x + 396.0, controls.y + 34.0, 84.0, 26.0),
+        Rect::new(controls.x + 328.0, controls.y + 34.0, 76.0, 26.0),
         if ctx.session.sandbox_mode {
             "Sandbox*"
         } else {
@@ -263,62 +251,16 @@ pub(super) fn draw_drawing_slate(
     ) {
         actions.push(UiAction::ToggleSandboxMode);
     }
-
-    let note_x = controls.x + 490.0;
-    if let Some(note) = &ctx.session.board.last_interpretation_note {
-        draw_text_block(
-            note,
-            note_x,
-            controls.y + 4.0,
-            controls.right() - note_x,
-            controls.h - 4.0,
-            12.0,
-            2.0,
-            ink(),
-        );
-    } else if let Some(diagram) = &ctx.session.board.last_diagram {
-        let names = diagram
-            .runes
-            .iter()
-            .take(3)
-            .map(|rune| ctx.data.rune_name(&rune.rune_id).to_owned())
-            .collect::<Vec<_>>()
-            .join(" + ");
-        let names = if names.is_empty() {
-            "No clear runes".to_owned()
-        } else {
-            names
-        };
-        draw_text_block(
-            &format!(
-                "Read: {} | circle {}% | potency {}%",
-                names,
-                (diagram.circle_quality * 100.0).round() as i32,
-                (diagram.average_rune_potency() * 100.0).round() as i32
-            ),
-            note_x,
-            controls.y + 4.0,
-            controls.right() - note_x,
-            controls.h - 4.0,
-            13.0,
-            2.0,
-            if diagram.accepted() {
-                Color::new(0.14, 0.40, 0.22, 1.0)
-            } else {
-                Color::new(0.52, 0.20, 0.13, 1.0)
-            },
-        );
-    } else {
-        draw_text_block(
-            "Awaiting interpretation.",
-            note_x,
-            controls.y + 4.0,
-            controls.right() - note_x,
-            controls.h - 4.0,
-            13.0,
-            2.0,
-            muted_ink(),
-        );
+    // Diagnostics is a developer aid; compile it out of release builds entirely.
+    #[cfg(debug_assertions)]
+    if virtual_button(
+        Rect::new(controls.x + 414.0, controls.y + 34.0, 64.0, 26.0),
+        "Diag",
+        !drawing_active,
+        ButtonTone::Primary,
+        mouse,
+    ) {
+        actions.push(UiAction::CopyDiagnostics);
     }
 }
 
