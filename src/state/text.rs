@@ -1,5 +1,6 @@
 use super::EnchantGrade;
 use crate::data::{CommissionDef, GameData, RuneCategory, RuneDef};
+use macroquad_toolkit::ui::capitalize;
 use std::collections::HashMap;
 
 pub(super) fn result_title(
@@ -22,17 +23,17 @@ pub(super) fn result_title(
         EnchantGrade::Brilliant => match modifier {
             Some(modifier) => format!(
                 "{} of {} {}",
-                title_case(&commission.item),
+                capitalize(&commission.item),
                 modifier,
                 effect
             ),
-            None => format!("Perfect {} of {}", title_case(&commission.item), effect),
+            None => format!("Perfect {} of {}", capitalize(&commission.item), effect),
         },
-        EnchantGrade::Reliable => format!("{} of {}", title_case(&commission.item), effect),
+        EnchantGrade::Reliable => format!("{} of {}", capitalize(&commission.item), effect),
         EnchantGrade::Unstable => format!("Volatile {} of {}", commission.item, effect),
         EnchantGrade::Failed => {
             let required = data.rune_name(&commission.required_effect);
-            format!("{} of Mild {}", title_case(&commission.item), required)
+            format!("{} of Mild {}", capitalize(&commission.item), required)
         }
     }
 }
@@ -120,12 +121,4 @@ pub(super) fn side_effect(
 
 pub(super) fn percent(value: f32) -> i32 {
     (value.clamp(0.0, 1.0) * 100.0).round() as i32
-}
-
-fn title_case(value: &str) -> String {
-    let mut chars = value.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
 }

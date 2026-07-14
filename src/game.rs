@@ -17,6 +17,7 @@ use macroquad_toolkit::persistence::{
     delete_slot, get_save_slots, load_from_slot_with_migration, save_to_slot_with_version,
     slot_exists,
 };
+use macroquad_toolkit::settings::GameSettings;
 
 pub struct Game {
     data: GameData,
@@ -30,7 +31,7 @@ pub struct Game {
     rune_guide_pages: [usize; 4],
     journal_open: bool,
     settings_open: bool,
-    fullscreen: bool,
+    settings: GameSettings,
     suppress_rune_erase: bool,
     guide_edit_mode: bool,
     interpretation_feedback_until: f64,
@@ -71,6 +72,9 @@ impl Game {
             loaded_assets
         ));
 
+        let settings = GameSettings::load(&data.config.game_name);
+        settings.apply_display();
+
         let session = GameSession::new(&data.config);
         let mut game = Self {
             data,
@@ -84,7 +88,7 @@ impl Game {
             rune_guide_pages: [0; 4],
             journal_open: false,
             settings_open: false,
-            fullscreen: false,
+            settings,
             suppress_rune_erase: false,
             guide_edit_mode: false,
             interpretation_feedback_until: 0.0,
@@ -137,7 +141,7 @@ impl Game {
             rune_guide_pages: &self.rune_guide_pages,
             journal_open: self.journal_open,
             settings_open: self.settings_open,
-            fullscreen: self.fullscreen,
+            fullscreen: self.settings.fullscreen,
             suppress_rune_erase: self.suppress_rune_erase,
             guide_edit_mode: self.guide_edit_mode,
             interpretation_feedback_active: get_time() < self.interpretation_feedback_until,
@@ -273,8 +277,8 @@ impl Game {
                 self.settings_open = false;
             }
             UiAction::ToggleFullscreen => {
-                self.fullscreen = !self.fullscreen;
-                set_fullscreen(self.fullscreen);
+                self.settings.toggle_fullscreen();
+                self.settings.save(&self.data.config.game_name).ok();
             }
             UiAction::ExitGame => self.exit_game(),
             UiAction::ToggleJournal => {
