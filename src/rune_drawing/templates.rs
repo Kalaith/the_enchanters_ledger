@@ -48,11 +48,10 @@ pub(crate) fn all_template_rune_ids() -> impl Iterator<Item = &'static str> {
 }
 
 /// The rune's declared structural profile, if it has one.
-pub(crate) fn structure_spec_for_rune(rune_id: &str) -> Option<&'static super::shape::StructureSpec> {
-    template_table()
-        .get(rune_id)?
-        .structure
-        .as_ref()
+pub(crate) fn structure_spec_for_rune(
+    rune_id: &str,
+) -> Option<&'static super::shape::StructureSpec> {
+    template_table().get(rune_id)?.structure.as_ref()
 }
 
 /// All (truth, confusable) pairs declared in the template data — the

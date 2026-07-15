@@ -2,9 +2,7 @@ use super::canvas::{
     draw_strokes, eraser_radius_in_rect, point_distance, point_in_rect, point_to_screen,
     ERASER_RADIUS_PIXELS,
 };
-use super::widgets::{
-    mouse_over_rect, muted_ink, parchment_line, parchment_page, virtual_button,
-};
+use super::widgets::{mouse_over_rect, muted_ink, parchment_line, parchment_page, virtual_button};
 use super::{UiAction, UiContext};
 use crate::rune_drawing::{template_strokes_for_rune, StrokePoint};
 use crate::state::{GuideTemplate, RuneMastery};

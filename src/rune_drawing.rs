@@ -12,9 +12,9 @@ mod templates;
 pub(crate) use scoring::stroke_assignment;
 use scoring::{adjusted_score_for_rune, NormalizedDrawing};
 pub(crate) use shape::{shape_report_for_rune, ShapeIssue};
+pub(crate) use templates::all_template_rune_ids;
 #[cfg(test)]
 pub(crate) use templates::raw;
-pub(crate) use templates::all_template_rune_ids;
 pub use templates::template_strokes_for_rune;
 pub(crate) use templates::template_variants_for_rune;
 
@@ -286,9 +286,7 @@ fn recognize_with_previous<'a>(
     // outcome ambiguous, so the acceptance band still gets the final say.
     if let Some(previous) = previous {
         if let Some(position) = scores.iter().position(|entry| entry.0 == previous) {
-            if position > 0
-                && scores[0].1 - scores[position].1 < RECOGNITION_HYSTERESIS_MARGIN
-            {
+            if position > 0 && scores[0].1 - scores[position].1 < RECOGNITION_HYSTERESIS_MARGIN {
                 let sticky = scores.remove(position);
                 scores.insert(0, sticky);
             }

@@ -90,72 +90,43 @@ pub(super) fn draw_parchment_sheet(rect: Rect) {
 }
 
 pub(super) fn draw_corner_marks(rect: Rect, color: Color) {
-    let len = 16.0;
-    let gap = 5.0;
-    draw_line(
-        rect.x + gap,
-        rect.y + gap,
-        rect.x + gap + len,
-        rect.y + gap,
-        1.0,
+    draw_corner_marks_spec(
+        rect,
         color,
+        &CornerMarkSpec {
+            len: 16.0,
+            gap: 5.0,
+            thickness: 1.0,
+        },
     );
-    draw_line(
-        rect.x + gap,
-        rect.y + gap,
-        rect.x + gap,
-        rect.y + gap + len,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.right() - gap - len,
-        rect.y + gap,
-        rect.right() - gap,
-        rect.y + gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.right() - gap,
-        rect.y + gap,
-        rect.right() - gap,
-        rect.y + gap + len,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.x + gap,
-        rect.bottom() - gap,
-        rect.x + gap + len,
-        rect.bottom() - gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.x + gap,
-        rect.bottom() - gap - len,
-        rect.x + gap,
-        rect.bottom() - gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.right() - gap - len,
-        rect.bottom() - gap,
-        rect.right() - gap,
-        rect.bottom() - gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.right() - gap,
-        rect.bottom() - gap - len,
-        rect.right() - gap,
-        rect.bottom() - gap,
-        1.0,
-        color,
-    );
+}
+
+fn plaque_style() -> PlaqueStyle {
+    PlaqueStyle {
+        frame: SurfaceStyle::new(Color::new(0.040, 0.036, 0.030, 1.0))
+            .with_border(1.0, Color::new(0.16, 0.11, 0.055, 1.0))
+            .with_inner_border(2.0, 1.0, Color::new(0.70, 0.50, 0.22, 0.26)),
+        face_inner_border: Some((4.0, 1.0, Color::new(0.96, 0.74, 0.34, 0.12))),
+        top_highlight: None,
+        bevel: Some(PlaqueBevel {
+            disabled_fade: 0.45,
+            ..PlaqueBevel::default()
+        }),
+        corner_marks: Some(PlaqueMarks {
+            spec: CornerMarkSpec {
+                len: 8.0,
+                gap: 3.0,
+                thickness: 1.0,
+            },
+            placement: PlaqueMarkPlacement::Face,
+            color: Some(Color::new(0.92, 0.66, 0.26, 0.62)),
+            disabled_color: Color::new(0.92, 0.66, 0.26, 0.22),
+        }),
+        disabled_border: Color::new(0.30, 0.28, 0.24, 0.82),
+        selected_border: Some(brass()),
+        selected_border_width: Some(1.8),
+        ..PlaqueStyle::default()
+    }
 }
 
 pub(super) fn virtual_button(
@@ -165,29 +136,14 @@ pub(super) fn virtual_button(
     tone: ButtonTone,
     mouse: Vec2,
 ) -> bool {
-    let hovered = enabled && mouse_over_rect(rect, mouse);
-    let pressed = hovered && is_mouse_button_down(MouseButton::Left);
-    let activated = hovered && is_mouse_button_released(MouseButton::Left);
-    draw_button_plaque(rect, tone, enabled, hovered, pressed, false);
-
-    let palette = button_palette(tone);
-    let font_size = (rect.h * 0.42).clamp(10.0, 17.0);
-    draw_text_centered_in_box_ex(
+    plaque_button(
+        rect,
         text,
-        rect.x + 6.0,
-        rect.y + if pressed { 1.0 } else { 0.0 } - 1.0,
-        rect.w - 12.0,
-        rect.h,
-        TextStyle::new(
-            font_size,
-            if enabled {
-                palette.text
-            } else {
-                Color::new(0.42, 0.40, 0.36, 1.0)
-            },
-        ),
-    );
-    activated
+        &plaque_style(),
+        &button_palette(tone),
+        enabled,
+        mouse,
+    )
 }
 
 pub(super) fn draw_button_plaque(
@@ -198,162 +154,22 @@ pub(super) fn draw_button_plaque(
     pressed: bool,
     selected: bool,
 ) {
-    let palette = button_palette(tone);
-    let inset = rect.inset(3.0);
-    let face = if !enabled {
-        palette.disabled
-    } else if pressed {
-        palette.pressed
-    } else if hovered || selected {
-        palette.hovered
-    } else {
-        palette.normal
-    };
-    let border = if selected {
-        brass()
-    } else if enabled {
-        palette.border
-    } else {
-        Color::new(0.30, 0.28, 0.24, 0.82)
-    };
-
-    draw_rectangle(
-        rect.x + 2.0,
-        rect.y + 3.0,
-        rect.w,
-        rect.h,
-        Color::new(0.015, 0.012, 0.010, 0.58),
-    );
-    draw_surface(
+    draw_plaque(
         rect,
-        &SurfaceStyle::new(Color::new(0.040, 0.036, 0.030, 1.0))
-            .with_border(1.0, Color::new(0.16, 0.11, 0.055, 1.0))
-            .with_inner_border(2.0, 1.0, Color::new(0.70, 0.50, 0.22, 0.26)),
-    );
-    draw_surface(
-        inset,
-        &SurfaceStyle::new(face)
-            .with_border(if selected { 1.8 } else { 1.0 }, border)
-            .with_inner_border(4.0, 1.0, Color::new(0.96, 0.74, 0.34, 0.12)),
-    );
-
-    let top = Color::new(
-        (face.r + 0.050).min(1.0),
-        (face.g + 0.050).min(1.0),
-        (face.b + 0.050).min(1.0),
-        face.a,
-    );
-    draw_rectangle(
-        inset.x + 2.0,
-        inset.y + 2.0,
-        inset.w - 4.0,
-        inset.h * 0.38,
-        top,
-    );
-    draw_line(
-        inset.x + 4.0,
-        inset.y + 4.0,
-        inset.right() - 4.0,
-        inset.y + 4.0,
-        1.0,
-        Color::new(1.0, 0.82, 0.44, if enabled { 0.28 } else { 0.10 }),
-    );
-    draw_line(
-        inset.x + 4.0,
-        inset.bottom() - 4.0,
-        inset.right() - 4.0,
-        inset.bottom() - 4.0,
-        1.0,
-        Color::new(0.0, 0.0, 0.0, if enabled { 0.30 } else { 0.16 }),
-    );
-    draw_small_corner_marks(
-        inset,
-        Color::new(0.92, 0.66, 0.26, if enabled { 0.62 } else { 0.22 }),
+        &plaque_style(),
+        &button_palette(tone),
+        PlaqueState {
+            enabled,
+            hovered,
+            pressed,
+            selected,
+        },
     );
 }
 
-fn draw_small_corner_marks(rect: Rect, color: Color) {
-    let len = 8.0;
-    let gap = 3.0;
-    draw_line(
-        rect.x + gap,
-        rect.y + gap,
-        rect.x + gap + len,
-        rect.y + gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.x + gap,
-        rect.y + gap,
-        rect.x + gap,
-        rect.y + gap + len,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.right() - gap - len,
-        rect.y + gap,
-        rect.right() - gap,
-        rect.y + gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.right() - gap,
-        rect.y + gap,
-        rect.right() - gap,
-        rect.y + gap + len,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.x + gap,
-        rect.bottom() - gap,
-        rect.x + gap + len,
-        rect.bottom() - gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.x + gap,
-        rect.bottom() - gap - len,
-        rect.x + gap,
-        rect.bottom() - gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.right() - gap - len,
-        rect.bottom() - gap,
-        rect.right() - gap,
-        rect.bottom() - gap,
-        1.0,
-        color,
-    );
-    draw_line(
-        rect.right() - gap,
-        rect.bottom() - gap - len,
-        rect.right() - gap,
-        rect.bottom() - gap,
-        1.0,
-        color,
-    );
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ButtonPalette {
-    normal: Color,
-    hovered: Color,
-    pressed: Color,
-    disabled: Color,
-    border: Color,
-    text: Color,
-}
-
-fn button_palette(tone: ButtonTone) -> ButtonPalette {
+fn button_palette(tone: ButtonTone) -> PlaquePalette {
     match tone {
-        ButtonTone::Primary => ButtonPalette {
+        ButtonTone::Primary => PlaquePalette {
             normal: Color::new(0.16, 0.23, 0.34, 1.0),
             hovered: Color::new(0.21, 0.31, 0.46, 1.0),
             pressed: Color::new(0.10, 0.16, 0.26, 1.0),
@@ -361,7 +177,7 @@ fn button_palette(tone: ButtonTone) -> ButtonPalette {
             border: Color::new(0.58, 0.64, 0.74, 0.90),
             text: parchment(),
         },
-        ButtonTone::Secondary => ButtonPalette {
+        ButtonTone::Secondary => PlaquePalette {
             normal: Color::new(0.16, 0.13, 0.22, 1.0),
             hovered: Color::new(0.22, 0.18, 0.30, 1.0),
             pressed: Color::new(0.11, 0.09, 0.17, 1.0),
@@ -369,7 +185,7 @@ fn button_palette(tone: ButtonTone) -> ButtonPalette {
             border: Color::new(0.58, 0.50, 0.72, 0.78),
             text: parchment(),
         },
-        ButtonTone::Positive => ButtonPalette {
+        ButtonTone::Positive => PlaquePalette {
             normal: Color::new(0.12, 0.30, 0.17, 1.0),
             hovered: Color::new(0.18, 0.40, 0.23, 1.0),
             pressed: Color::new(0.08, 0.21, 0.12, 1.0),
@@ -377,7 +193,7 @@ fn button_palette(tone: ButtonTone) -> ButtonPalette {
             border: Color::new(0.55, 0.72, 0.42, 0.85),
             text: parchment(),
         },
-        ButtonTone::Warning => ButtonPalette {
+        ButtonTone::Warning => PlaquePalette {
             normal: Color::new(0.38, 0.18, 0.10, 1.0),
             hovered: Color::new(0.50, 0.25, 0.13, 1.0),
             pressed: Color::new(0.26, 0.11, 0.07, 1.0),
@@ -385,7 +201,7 @@ fn button_palette(tone: ButtonTone) -> ButtonPalette {
             border: Color::new(0.82, 0.55, 0.26, 0.82),
             text: parchment(),
         },
-        ButtonTone::Danger => ButtonPalette {
+        ButtonTone::Danger => PlaquePalette {
             normal: Color::new(0.34, 0.13, 0.11, 1.0),
             hovered: Color::new(0.48, 0.17, 0.14, 1.0),
             pressed: Color::new(0.22, 0.08, 0.07, 1.0),
@@ -393,7 +209,7 @@ fn button_palette(tone: ButtonTone) -> ButtonPalette {
             border: Color::new(0.78, 0.42, 0.34, 0.80),
             text: parchment(),
         },
-        ButtonTone::Muted => ButtonPalette {
+        ButtonTone::Muted => PlaquePalette {
             normal: Color::new(0.095, 0.100, 0.105, 1.0),
             hovered: Color::new(0.14, 0.145, 0.155, 1.0),
             pressed: Color::new(0.060, 0.064, 0.070, 1.0),

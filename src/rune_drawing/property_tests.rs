@@ -35,7 +35,10 @@ fn translation_and_scale_do_not_change_confidence() {
         for scale in [0.5_f32, 1.25] {
             let scaled = perturb(&template, scale, (0.0, 0.0), 0.0, 0);
             let scaled_outcome = recognize_rune(&scaled, runes.iter().copied()).unwrap();
-            assert_eq!(scaled_outcome.rune_id, baseline.rune_id, "id={id} scale={scale}");
+            assert_eq!(
+                scaled_outcome.rune_id, baseline.rune_id,
+                "id={id} scale={scale}"
+            );
             assert!(
                 (scaled_outcome.confidence - baseline.confidence).abs() < 0.01,
                 "id={id} scale={scale} baseline={baseline:?} scaled={scaled_outcome:?}"

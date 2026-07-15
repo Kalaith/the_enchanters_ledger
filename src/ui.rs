@@ -26,6 +26,8 @@ use practice::draw_practice_overlay;
 use rune_guide::draw_rune_palette;
 use title::{draw_settings_window, draw_title_screen};
 use widgets::*;
+// Disambiguate from the toolkit prelude's `draw_corner_marks` glob export.
+use widgets::draw_corner_marks;
 
 pub const LOGICAL_WIDTH: f32 = 1280.0;
 pub const LOGICAL_HEIGHT: f32 = 720.0;
