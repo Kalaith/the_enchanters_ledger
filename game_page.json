@@ -1,0 +1,22 @@
+{
+  "title": "The Enchanter's Ledger",
+  "status": { "text": "Playable", "class": "playable" },
+  "canvas_rendering": "auto",
+  "about": [
+    "Run a small enchantment workshop as a non-mage who designs magical diagrams for customers who can power them with mana."
+  ],
+  "controls": [
+    { "key": "Left Mouse", "desc": "Draw diagrams; click a guide rune, then click the slate to place a tracing guide" },
+    { "key": "Right Mouse", "desc": "Hold on the slate to erase ink; right-click a selected guide rune to deselect" },
+    { "key": "T / D", "desc": "Test the diagram / deliver the product" },
+    { "key": "R / N", "desc": "Research new runes / decline the current commission" },
+    { "key": "S / L", "desc": "Save / load the ledger" }
+  ],
+  "details": [
+    { "label": "Genre", "value": "Crafting Puzzle" },
+    { "label": "Engine", "value": "Macroquad + Toolkit" },
+    { "label": "Platform", "value": "Browser, Windows" }
+  ],
+  "wasm_cache_bust": "date-now",
+  "repository": "https://github.com/Kalaith/the_enchanters_ledger"
+}
