@@ -25,15 +25,21 @@ The player runs a small enchantment workshop. Customers bring practical, strange
 - `S` / `L`: save / load.
 - `Esc`: clear the drafting page.
 
+## Design docs
+
+- `.project/prd.md` — the authoritative ruleset for rune recognition and magic
+  circles: what a drawing must look like to be read, what makes it read *well*,
+  and what a full diagram means. Every recognizer constant should trace back to
+  a sentence here, and every sentence back to a test.
+- `.project/magic-symbol-system-plan.md` — the six-phase plan that produced the
+  system above, with a closed-out implementation audit.
+- `tests/corpus/README.md` — how to capture real hand-drawn rune samples.
+
+Remaining work is tracked in `TODO.md`.
+
 ## Validation
 
 ```powershell
 .\publish.ps1
 ```
-# Practical Future Improvements
-
-- Add parser tests for rune interpretation, malformed glyphs, enclosure detection, and invalid diagram recovery.
-- Move commission delivery, testing results, accident chances, and research unlocks into pure reducers with accounting tests.
-- Add recipe-discovery fixtures that verify ledger entries, reputation, coins, insight, and archive tier progression together.
-- Separate drawing input capture from enchantment evaluation so slate rendering cannot alter commission logic.
 
