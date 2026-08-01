@@ -56,8 +56,12 @@ deliberately left for later:
 
 ## Tests & structure
 
-- Parser tests for rune interpretation, malformed glyphs, enclosure detection,
-  and invalid-diagram recovery.
+- ~~Parser tests for rune interpretation, malformed glyphs, enclosure detection,
+  and invalid-diagram recovery.~~ Done — `rune_diagram::tests::parsing` covers
+  all four: the output contract (ordering, value bands), inkless and zero-extent
+  strokes and off-slate coordinates, both non-radius guards in
+  `is_inside_working_circle`, and the empty / bare-circle / circle-less
+  interpretations.
 - Move commission delivery, test results, accident chances, and research
   unlocks into pure reducers with accounting tests.
 - Recipe-discovery fixtures verifying ledger entries, reputation, coins,

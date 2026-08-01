@@ -2,6 +2,7 @@
 //! fixture they share lives in `fixtures`.
 
 mod fixtures;
+mod parsing;
 mod quality;
 mod recognition;
 mod scopes;
