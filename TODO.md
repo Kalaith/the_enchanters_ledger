@@ -49,7 +49,10 @@ deliberately left for later:
 
 - Tune the containment budget. Root and sub-scope capacity coefficients are
   still the documented first cut.
-- Per-rune potency itemization on the slate; it shows only the average today.
+- ~~Per-rune potency itemization on the slate; it shows only the average
+  today.~~ Done — `ui::drawing::feedback::draw_potency_tags` tags each read rune
+  with its own figure, banded weak / reference / strong against the potency
+  curve's 1.0 anchor. The ledger row now says "avg potency" for the summary.
 
 ## Tests & structure
 

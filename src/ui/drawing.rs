@@ -1,3 +1,5 @@
+mod feedback;
+
 use super::canvas::{
     draw_strokes, eraser_radius_in_rect, point_distance, point_in_rect, point_to_screen,
     ERASER_RADIUS_PIXELS,
@@ -6,6 +8,7 @@ use super::widgets::{mouse_over_rect, muted_ink, parchment_line, parchment_page,
 use super::{UiAction, UiContext};
 use crate::rune_drawing::{template_strokes_for_rune, StrokePoint};
 use crate::state::{CircleGuide, GuideTemplate, RuneMastery};
+use feedback::{draw_potency_tags, draw_reading, draw_spell_feedback};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 use std::collections::HashMap;
@@ -84,6 +87,7 @@ pub(super) fn draw_drawing_slate(
     if ctx.interpretation_feedback_active {
         if let Some(diagram) = &ctx.session.board.last_diagram {
             draw_spell_feedback(diagram, slate);
+            draw_potency_tags(diagram, slate);
         }
         draw_reading(ctx.reading_lines, slate);
     }
@@ -284,42 +288,6 @@ pub(super) fn draw_drawing_slate(
         mouse,
     ) {
         actions.push(UiAction::CopyDiagnostics);
-    }
-}
-
-/// The reading, revealed over the slate after Interpret.
-///
-/// This is the whole teaching surface for the placement grammar
-/// (`.project/placement-rules.md` §4): the player commits to a drawing, presses
-/// Interpret, and the game reads their handwriting back to them. Nothing shows
-/// while the pen is down — the uncertainty is the mechanic.
-fn draw_reading(lines: &[String], slate: Rect) {
-    if lines.is_empty() {
-        return;
-    }
-    let line_height = 19.0;
-    let card = Rect::new(
-        slate.x + 14.0,
-        slate.bottom() - 22.0 - lines.len() as f32 * line_height,
-        slate.w - 28.0,
-        14.0 + lines.len() as f32 * line_height,
-    );
-    draw_surface(
-        card,
-        &SurfaceStyle::new(Color::new(0.94, 0.88, 0.72, 0.93))
-            .with_border(1.0, Color::new(0.42, 0.27, 0.12, 0.70)),
-    );
-    for (index, line) in lines.iter().enumerate() {
-        draw_text_block(
-            line,
-            card.x + 12.0,
-            card.y + 6.0 + index as f32 * line_height,
-            card.w - 24.0,
-            line_height,
-            14.0,
-            1.0,
-            Color::new(0.10, 0.06, 0.03, 1.0),
-        );
     }
 }
 
@@ -541,57 +509,4 @@ fn guide_point_to_screen(rect: Rect, center: StrokePoint, scale: f32, point: Str
         center.x + (point.x - 0.5) * scale * base,
         center.y + (point.y - 0.5) * scale * base,
     )
-}
-
-fn draw_spell_feedback(diagram: &crate::rune_diagram::DiagramInterpretation, rect: Rect) {
-    let Some(spell) = &diagram.spell else {
-        return;
-    };
-    let center = rect.center();
-    let base_radius = rect.w.min(rect.h) * 0.42;
-    let alpha = (0.14 + spell.complexity * 0.30).clamp(0.16, 0.48);
-    let color = if spell.tier_rank >= 4 {
-        Color::new(0.38, 0.82, 0.95, alpha)
-    } else if spell.tier_rank >= 3 {
-        Color::new(0.86, 0.64, 0.20, alpha)
-    } else {
-        Color::new(0.44, 0.70, 0.44, alpha)
-    };
-    for index in 0..spell.ring_count.clamp(1, 4) {
-        let radius = base_radius * (0.88 - index as f32 * 0.12);
-        draw_circle_lines(center.x, center.y, radius, 2.0, color);
-    }
-    for index in 0..spell.satellite_count.min(10) {
-        let angle = std::f32::consts::TAU * index as f32 / spell.satellite_count.max(1) as f32;
-        let point = vec2(
-            center.x + angle.cos() * base_radius * 0.62,
-            center.y + angle.sin() * base_radius * 0.62,
-        );
-        draw_circle_lines(point.x, point.y, 8.0 + spell.intensity * 5.0, 1.7, color);
-    }
-    for index in 0..spell.radial_count.min(8) {
-        let angle = std::f32::consts::TAU * index as f32 / spell.radial_count.max(1) as f32;
-        draw_line(
-            center.x,
-            center.y,
-            center.x + angle.cos() * base_radius * 0.72,
-            center.y + angle.sin() * base_radius * 0.72,
-            1.2,
-            Color::new(color.r, color.g, color.b, color.a * 0.55),
-        );
-    }
-    for index in 0..spell.script_mark_count.min(36) {
-        let angle = std::f32::consts::TAU * index as f32 / spell.script_mark_count.max(1) as f32;
-        let radius = base_radius * (0.40 + (index % 3) as f32 * 0.10);
-        let point = vec2(
-            center.x + angle.cos() * radius,
-            center.y + angle.sin() * radius,
-        );
-        draw_circle(
-            point.x,
-            point.y,
-            1.6,
-            Color::new(color.r, color.g, color.b, color.a * 0.70),
-        );
-    }
 }

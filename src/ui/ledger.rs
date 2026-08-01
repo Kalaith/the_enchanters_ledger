@@ -117,7 +117,9 @@ fn draw_diagram_status(ctx: &UiContext<'_>, rect: Rect) {
         };
         draw_text_block(
             &format!(
-                "{} | circle {}% | potency {}%",
+                // "avg" because the per-rune figures are now tagged on the slate
+                // itself (`drawing::draw_potency_tags`); this row is the summary.
+                "{} | circle {}% | avg potency {}%",
                 names,
                 (diagram.circle_quality * 100.0).round() as i32,
                 (diagram.average_rune_potency() * 100.0).round() as i32
