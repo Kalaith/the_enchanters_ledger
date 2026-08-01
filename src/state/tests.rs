@@ -2,6 +2,7 @@
 //! they share lives in `fixtures`.
 
 mod commissions;
+mod discovery;
 mod fixtures;
 mod progression;
 mod recognition;

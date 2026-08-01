@@ -83,7 +83,12 @@ deliberately left for later:
   interpretations.
 - Move commission delivery, test results, accident chances, and research
   unlocks into pure reducers with accounting tests.
-- Recipe-discovery fixtures verifying ledger entries, reputation, coins,
-  insight, and archive-tier progression together.
+- ~~Recipe-discovery fixtures verifying ledger entries, reputation, coins,
+  insight, and archive-tier progression together.~~ Done —
+  `state::tests::discovery` walks one run from first test through delivery to
+  research: the ledger row and its `uses`/`best_score` counters, the single
+  journal entry, coins/reputation/insight moving by exactly what the report
+  claims, a failed grade recording nothing, and accumulated insight buying the
+  rank that unlocks `fire`.
 - Separate drawing input capture from enchantment evaluation so slate rendering
   cannot alter commission logic.
