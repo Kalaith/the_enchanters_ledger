@@ -13,7 +13,26 @@ deliberately left open, plus outstanding test and structure work.
   the window-based `extract_overlapped_spheres` /
   `recover_contaminated_multi_stroke_rune` recovery.
 - Close out the one tracked confusion — `("safer", "sphere")` under sparse
-  (14-point) resampling.
+  (14-point) resampling. Measured, not yet fixed: the cause is *not* only the
+  resample-grid shift the `confusion_gate` comment describes. `corner_count` is
+  not scale-free. Sweeping the input density through
+  `shape::geometry::corner_count` gives, for the `safer` hexagon, 6.7 corners on
+  the raw 7-point template but 4.0 at 14 points; for the `sphere` template, 3.0
+  at 24+ points but **7.9 at 14 and 10.9 at 18** — a sparsely sampled circle is
+  a coarse polygon, and its per-vertex turns clear the corner threshold. So the
+  measure reports a hexagon as rounder than a circle at exactly the density the
+  gate tests. Two consequences: `safer`'s `corners` check (target 6, tolerance
+  4) collapses to ~0.48, and `sphere`'s `corner_penalty` (`above: 5.0`, so it
+  needs ≥ 6.0) never fires on a hexagon — nothing in `sphere`'s spec can tell a
+  hexagon from a circle, because `circularity` is radius-consistency-based and a
+  regular hexagon has near-constant radius. Replacing the three-point turn
+  stencil with turning accumulated over the window fixes the density dependence
+  above ~18 points but not below, because at ±2 steps of 36 the uniform turning
+  of *any* closed curve (0.70 rad) already exceeds the 0.60 threshold. The fix
+  wants a corner measure defined as turning *concentrated* relative to the
+  shape's own uniform rate, which reshuffles every rune's corner target in
+  `rune_templates.json` — a piece of work in its own right, gated by
+  `confusion_gate`.
 - `sound` and `larger` cannot be read inside a diagram at all. Both recognize
   perfectly on their own, but their component strokes sit far enough apart
   (relative to their own size) that `rune_diagram::geometry::cluster_strokes`
