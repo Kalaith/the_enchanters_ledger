@@ -17,13 +17,49 @@ The player runs a small enchantment workshop. Customers bring practical, strange
 ## Controls
 
 - Left mouse: draw enclosed diagrams; click a rune guide entry, then click the slate to place a tracing guide.
+- `Reference` (above the slate buttons): lays out the whole ideal diagram for the pinned commission — the working circle plus its required runes, positioned and sized exactly as the recognizer wants to read them — as tracing guides. Deterministic and repeatable. In Sandbox it inks that diagram outright instead.
 - Right mouse: hold on the diagram slate to erase ink; right-click an armed or selected guide rune to deselect it.
+- `M`: open the diagram manual — every commission and talisman with the diagram that fills it, and a button to lay any of them out on the slate.
 - `T`: test the current diagram.
 - `D`: deliver the current commission.
 - `R`: research the next archive tier.
 - `N`: decline the current commission.
 - `S` / `L`: save / load.
 - `Esc`: clear the drafting page.
+
+## Diagram manual
+
+Every quest's diagram is generated, not authored: `src/perfect_diagram` lays out
+the working circle, the runes at the size the reading rewards, and any
+structural work the order demands; `src/manual` pairs that with the order's
+text. The same entries feed the in-game manual (`M`) and a standalone page:
+
+```powershell
+cargo run -- --manual docs/manual   # writes docs/manual/index.html
+```
+
+The page is self-contained (inline SVG, no external requests). `cargo test`
+asserts every generated diagram actually passes the quest it documents.
+
+The manual also carries a **practice ladder** (`assets/data/ladder.json`): ten
+drills that trade quantity for difficulty. Level 1 is ten easy marks around one
+circle; each rung drops one mark and adds difficulty elsewhere, down to a single
+mark at level 10. Rungs are data — adding one is a JSON edit — and every rung's
+diagram is interpreted back through the real recognizer by the tests.
+
+## Placement
+
+Where a mark sits inside the circle changes what it does. Marks drawn
+deliberately close are read together: a modifier pulled in beside one effect
+tempers that effect alone rather than the whole working, and a shape at the
+heart of the circle is the default that ring marks make exceptions to. Absolute
+direction means nothing — rotating a diagram produces the identical reading, and
+marks spaced evenly join nothing at all, so a diagram drawn without knowing the
+rule reads exactly as it always did.
+
+Press Interpret and the game reads your handwriting back to you as sentences.
+That is the only place the rule is taught. `.project/placement-rules.md` is the
+design; `src/reading/` implements it.
 
 ## Design docs
 

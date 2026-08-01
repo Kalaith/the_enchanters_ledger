@@ -1,6 +1,6 @@
 //! Runtime state, save data, and enchantment evaluation.
 
-use crate::data::{GameConfig, GameData, RuneDef};
+use crate::data::{CommissionDef, GameConfig, GameData, RuneDef};
 use crate::rune_diagram::{interpret_diagram_in_context, DiagramInterpretation};
 use crate::rune_drawing::{canonicalize_stroke, erase_strokes_at, DrawnStroke, StrokePoint};
 use serde::{Deserialize, Serialize};
@@ -15,10 +15,7 @@ mod text;
 mod tutorial;
 mod work;
 
-pub use board::{
-    node_distance, node_grid, DesignBoard, GuideTemplate, Link, BOARD_COLUMNS, BOARD_NODE_COUNT,
-    BOARD_ROWS,
-};
+pub use board::{CircleGuide, DesignBoard, GuideTemplate};
 pub use save::migrate_save_value;
 use text::percent;
 pub use tutorial::TutorialStage;
@@ -272,14 +269,12 @@ impl GameSession {
         }
         self.board.selected_rune = Some(rune_id.to_owned());
         self.board.template_armed = true;
-        self.board.link_anchor = None;
         Ok(())
     }
 
     pub fn deselect_rune(&mut self) {
         self.board.selected_rune = None;
         self.board.template_armed = false;
-        self.board.link_anchor = None;
     }
 
     pub fn place_guide_template(
@@ -312,6 +307,86 @@ impl GameSession {
             "Placed {} as a tracing guide; only your ink will be scored.",
             rune.name
         ))
+    }
+
+    /// Lays out the reference diagram for the pinned work order: the canonical
+    /// circle-with-runes-inside from `crate::perfect_diagram`, dropped onto the
+    /// slate as tracing guides. Repeatable and deterministic — asking twice
+    /// produces the same guides, so a player part-way through a trace can
+    /// re-summon it without anything moving.
+    ///
+    /// Only runes the player may actually use are laid out; a commission whose
+    /// notation is still locked (or a tutorial step that has only opened some of
+    /// it) gets a guide for the part that is open, and is told what is missing —
+    /// the same rule `place_guide_template` enforces one rune at a time.
+    ///
+    /// In sandbox mode it also inks the diagram outright. Sandbox exists for
+    /// free experimentation and pays no delivery reward, so drawing the ideal
+    /// there is a way to *see* what a perfect read looks like; on commissioned
+    /// work the guides still have to be traced by hand.
+    pub fn place_reference_diagram(&mut self, data: &GameData) -> Result<String, String> {
+        let commission = self.current_commission(data).clone();
+        self.place_reference_for(&commission, data)
+    }
+
+    /// `place_reference_diagram` for an arbitrary order — the manual pages
+    /// through every quest in the game, and lays any of them out on the slate
+    /// from there without changing which order is pinned.
+    pub fn place_reference_for(
+        &mut self,
+        job: &CommissionDef,
+        data: &GameData,
+    ) -> Result<String, String> {
+        let locked = crate::manual::notation_for(job, data)
+            .into_iter()
+            .filter(|rune| {
+                data.rune(&rune.id)
+                    .is_some_and(|def| !self.can_use_rune(def))
+            })
+            .map(|rune| rune.name)
+            .collect::<Vec<_>>();
+        let diagram = crate::manual::diagram_for_job(job, data, |rune| self.can_use_rune(rune));
+        if diagram.runes.is_empty() {
+            return Err("None of this commission's notation is open yet.".to_owned());
+        }
+
+        let names = diagram
+            .rune_placements()
+            .map(|placement| data.rune_name(&placement.rune_id).to_owned())
+            .collect::<Vec<_>>()
+            .join(" + ");
+
+        self.board.guide_templates = diagram
+            .rune_placements()
+            .map(|placement| GuideTemplate {
+                rune_id: placement.rune_id.clone(),
+                center: placement.center,
+                scale: placement.scale,
+            })
+            .collect();
+        self.board.circle_guide = Some(CircleGuide {
+            center: diagram.circle_center,
+            radius: diagram.circle_radius,
+        });
+        self.board.guide_structure = diagram.structure_strokes();
+        self.board.template_armed = false;
+        self.board.clear_interpretation_feedback();
+
+        let mut note = if self.sandbox_mode {
+            self.board.drawing_strokes = diagram.strokes();
+            self.board.active_stroke = None;
+            self.board.last_recognition = None;
+            format!("Inked the reference diagram: circle + {names}.")
+        } else {
+            format!("Reference laid out: trace the circle, then {names}.")
+        };
+        if !self.board.guide_structure.is_empty() {
+            note.push_str(" Faint marks are structure this order also wants.");
+        }
+        if !locked.is_empty() {
+            note.push_str(&format!(" Still locked: {}.", locked.join(" + ")));
+        }
+        Ok(note)
     }
 
     pub fn remove_guide_template(
@@ -414,6 +489,8 @@ impl GameSession {
         self.board.clear_marks();
         self.board.clear_drawing();
         self.board.guide_templates.clear();
+        self.board.circle_guide = None;
+        self.board.guide_structure.clear();
         self.board.clear_interpretation_feedback();
         self.board.last_evaluation = None;
     }
@@ -471,28 +548,41 @@ impl GameSession {
     }
 
     fn apply_interpreted_runes(&mut self, interpretation: &DiagramInterpretation) {
-        let mut occupied = HashSet::new();
-        let mut placed_nodes = Vec::new();
         self.board.clear_marks();
         for rune in &interpretation.runes {
-            let node = node_for_diagram_center(rune.center, &occupied);
-            occupied.insert(node);
-            placed_nodes.push(node);
-            self.board
-                .place(node, &rune.rune_id, rune.quality, rune.potency);
+            self.board.place(&rune.rune_id, rune.quality, rune.potency);
             // Mastery (plan Phase 5 item 2): every accepted read counts, not just delivered
             // commissions — Sandbox builds the same skill history as commissioned work, since
             // both read with the same recognizer, just different acceptance bands (item 1).
             self.record_rune_mastery(&rune.rune_id, rune.quality);
         }
-        for nodes in placed_nodes.windows(2) {
-            let link = Link::new(nodes[0], nodes[1]);
-            if !self.board.links.contains(&link) {
-                self.board.links.push(link);
-            }
-        }
         self.board.active_stroke = None;
         self.board.last_recognition = None;
+    }
+
+    /// How the last interpretation reads — which mark acts on the whole working
+    /// and which acts on one other mark. Derived from the stored interpretation
+    /// rather than kept alongside it, so the two can never disagree.
+    pub fn reading(&self, data: &GameData) -> Option<crate::reading::Reading> {
+        let diagram = self.board.last_diagram.as_ref()?;
+        let defs = data.runes.iter().collect::<Vec<_>>();
+        Some(crate::reading::read(
+            &diagram.runes,
+            diagram.circle_center,
+            &defs,
+        ))
+    }
+
+    /// The last interpretation in plain language — the sentences the slate shows
+    /// the player after they press Interpret. See
+    /// `.project/placement-rules.md` §4: this is the whole teaching surface for
+    /// the placement grammar, so it has to account for every mark.
+    pub fn reading_lines(&self, data: &GameData) -> Vec<String> {
+        let Some(reading) = self.reading(data) else {
+            return Vec::new();
+        };
+        let defs = data.runes.iter().collect::<Vec<_>>();
+        crate::reading::read_aloud(&reading, &defs)
     }
 
     fn interpretation_note(
@@ -560,32 +650,4 @@ impl GameSession {
         self.player.focus -= amount;
         Ok(())
     }
-}
-
-fn node_for_diagram_center(center: StrokePoint, occupied: &HashSet<usize>) -> usize {
-    (0..BOARD_NODE_COUNT)
-        .filter(|node| !occupied.contains(node))
-        .min_by(|a, b| {
-            let (ax, ay) = node_grid(*a);
-            let (bx, by) = node_grid(*b);
-            let a_pos = normalized_node_position(ax, ay);
-            let b_pos = normalized_node_position(bx, by);
-            let a_distance = normalized_distance(center, a_pos);
-            let b_distance = normalized_distance(center, b_pos);
-            a_distance.total_cmp(&b_distance)
-        })
-        .unwrap_or(0)
-}
-
-fn normalized_node_position(col: i32, row: i32) -> StrokePoint {
-    StrokePoint::new(
-        col as f32 / (BOARD_COLUMNS as f32 - 1.0),
-        row as f32 / (BOARD_ROWS as f32 - 1.0),
-    )
-}
-
-fn normalized_distance(a: StrokePoint, b: StrokePoint) -> f32 {
-    let dx = a.x - b.x;
-    let dy = a.y - b.y;
-    (dx * dx + dy * dy).sqrt()
 }

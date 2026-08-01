@@ -234,6 +234,7 @@ pub fn analyze_magical_circle(
     marks: &[CircleMark],
     runes: &[InterpretedRune],
     rune_defs: &[&RuneDef],
+    reading: &crate::reading::Reading,
 ) -> Option<MagicalCircleSpell> {
     let ring_count = count_kind(marks, CircleStrokeKind::ReinforcementRing);
     let satellite_count = count_kind(marks, CircleStrokeKind::SatelliteSeal);
@@ -271,7 +272,7 @@ pub fn analyze_magical_circle(
     let tier_score = (max_tier as f32 / 4.0).clamp(0.25, 1.0);
     let structural_quality = structural_quality(marks);
     let satellite_placement = satellite_placement(marks);
-    let symmetry = circular_symmetry(marks, runes);
+    let symmetry = circular_symmetry(marks, runes, reading);
     let size_harmony = size_harmony(runes, rune_defs);
     let duplicate_effects = duplicate_effect_count(runes, rune_defs);
     let modifier_count = runes
@@ -430,7 +431,18 @@ fn rune_def<'a>(rune_defs: &[&'a RuneDef], rune_id: &str) -> Option<&'a RuneDef>
     rune_defs.iter().copied().find(|rune| rune.id == rune_id)
 }
 
-fn circular_symmetry(marks: &[CircleMark], runes: &[InterpretedRune]) -> f32 {
+/// Balance of the diagram: anchors whose directions cancel read as even.
+///
+/// Anchors are *groups*, not individual marks (`.project/placement-rules.md`
+/// §5.1). Marks drawn together are one thing the eye sees in one place, so
+/// three tight pairs spaced evenly are as balanced as six spread marks — and
+/// using the placement grammar no longer costs the symmetry bonus, which would
+/// have been exactly backwards.
+fn circular_symmetry(
+    marks: &[CircleMark],
+    runes: &[InterpretedRune],
+    reading: &crate::reading::Reading,
+) -> f32 {
     let mut anchors = marks
         .iter()
         .filter(|mark| {
@@ -441,12 +453,21 @@ fn circular_symmetry(marks: &[CircleMark], runes: &[InterpretedRune]) -> f32 {
         })
         .map(|mark| mark.angle)
         .collect::<Vec<_>>();
-    anchors.extend(
-        runes
-            .iter()
-            .filter(|rune| rune.orbit > 0.18)
-            .map(|rune| angle_from_unit_center(rune.center)),
-    );
+    let rune_angles = runes
+        .iter()
+        .map(|rune| angle_from_unit_center(rune.center))
+        .collect::<Vec<_>>();
+    let grouped = reading.group_angles(&rune_angles);
+    if grouped.is_empty() {
+        anchors.extend(
+            runes
+                .iter()
+                .filter(|rune| rune.orbit > 0.18)
+                .map(|rune| angle_from_unit_center(rune.center)),
+        );
+    } else {
+        anchors.extend(grouped);
+    }
     if anchors.len() < 2 {
         return 0.42;
     }
@@ -458,6 +479,17 @@ fn circular_symmetry(marks: &[CircleMark], runes: &[InterpretedRune]) -> f32 {
     (balance * 0.72 + count_score * 0.28).clamp(0.0, 1.0)
 }
 
+/// How well the marks are *sized*: each one measured against its category's
+/// reference scale.
+///
+/// This used to carry a second, quieter opinion about where each mark sat —
+/// shapes rewarded near the center, modifiers around orbit 0.55, everything
+/// else around 0.42. That is gone (`.project/placement-rules.md` §5.3). Orbit
+/// now carries *meaning* rather than quality: a shape at the heart shapes the
+/// whole working and a shape drawn against one effect shapes only that effect,
+/// and both are deliberate. Scoring the second one lower would have quietly
+/// charged the player for using the grammar — exactly the silent position
+/// penalty `prd.md` §4.4 deleted, grown back in a different place.
 fn size_harmony(runes: &[InterpretedRune], rune_defs: &[&RuneDef]) -> f32 {
     if runes.is_empty() {
         return 0.0;
@@ -467,13 +499,7 @@ fn size_harmony(runes: &[InterpretedRune], rune_defs: &[&RuneDef]) -> f32 {
         let Some(def) = rune_def(rune_defs, &rune.rune_id) else {
             continue;
         };
-        let scale_score = ratio_score(rune.scale.max(0.01), def.category.ideal_scale_in_circle());
-        let orbit_score = match def.category {
-            RuneCategory::Shape => (1.0 - rune.orbit / 0.34).clamp(0.0, 1.0),
-            RuneCategory::Modifier => (1.0 - (rune.orbit - 0.55).abs() / 0.42).clamp(0.0, 1.0),
-            _ => (1.0 - (rune.orbit - 0.42).abs() / 0.50).clamp(0.0, 1.0),
-        };
-        total += (scale_score * 0.62 + orbit_score * 0.38).clamp(0.0, 1.0);
+        total += ratio_score(rune.scale.max(0.01), def.category.ideal_scale_in_circle());
     }
     (total / runes.len() as f32).clamp(0.0, 1.0)
 }

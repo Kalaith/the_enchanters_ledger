@@ -7,8 +7,10 @@
     debug exe and drives it through the env-var capture hook
     (THE_ENCHANTERS_LEDGER_CAPTURE_*) provided by macroquad_toolkit::capture in
     src/main.rs. Scenes seed a GamePhase via Game::begin_capture_scene in
-    src/game.rs: "title" (main menu), "naming" (name-entry screen), and the
-    default "gameplay" (jumps straight into the workshop).
+    src/game.rs: "title" (main menu), "naming" (name-entry screen), "reference"
+    (the workshop with the pinned commission's reference diagram laid out as
+    tracing guides), "manual" (the diagram manual overlay), and the default
+    "gameplay" (jumps straight into the workshop).
 
 .EXAMPLE
     ./scripts/capture_ui.ps1

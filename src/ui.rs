@@ -13,6 +13,7 @@ mod commission;
 mod drawing;
 mod journal;
 mod ledger;
+mod manual;
 mod practice;
 mod rune_guide;
 mod title;
@@ -22,6 +23,7 @@ use commission::draw_commission_panel;
 use drawing::draw_drawing_slate;
 use journal::draw_journal_overlay;
 use ledger::draw_ledger_panel;
+use manual::draw_manual_overlay;
 use practice::draw_practice_overlay;
 use rune_guide::draw_rune_palette;
 use title::{draw_settings_window, draw_title_screen};
@@ -90,6 +92,10 @@ pub enum UiAction {
     DeleteSave,
     ToggleJournal,
     CloseJournal,
+    ToggleManual,
+    CloseManual,
+    SetManualPage(usize),
+    LayOutManualDiagram(usize),
     OpenPractice,
     ClosePractice,
     ClearPractice,
@@ -105,6 +111,7 @@ pub enum UiAction {
     SetRuneGuidePage(usize, usize),
     DeselectRune,
     PlaceRuneTemplate(StrokePoint),
+    ShowReferenceDiagram,
     RemoveRuneTemplate(usize),
     MoveRuneTemplate(usize, StrokePoint),
     ToggleGuideEditMode,
@@ -131,11 +138,20 @@ pub struct UiContext<'a> {
     pub loaded_assets: usize,
     pub rune_guide_pages: &'a [usize; 4],
     pub journal_open: bool,
+    pub manual_open: bool,
+    /// Every quest's manual page, built once per session by `game.rs` — the
+    /// diagrams are laid out from data, so there is nothing per-frame about
+    /// them.
+    pub manual: &'a [crate::manual::ManualEntry],
+    pub manual_page: usize,
     pub settings_open: bool,
     pub fullscreen: bool,
     pub suppress_rune_erase: bool,
     pub guide_edit_mode: bool,
     pub interpretation_feedback_active: bool,
+    /// What the last interpretation says, in the player's words — see
+    /// `crate::reading::sentences`.
+    pub reading_lines: &'a [String],
     pub title_texture: &'a Texture2D,
     pub practice: PracticeUi<'a>,
     pub ui: &'a UiSpace,
@@ -173,7 +189,7 @@ pub fn draw_game_ui(ctx: UiContext<'_>) -> Vec<UiAction> {
         return actions;
     }
 
-    let modal_open = ctx.journal_open || ctx.practice.open;
+    let modal_open = ctx.journal_open || ctx.practice.open || ctx.manual_open;
     let mut blocked_actions = Vec::new();
     let background_actions = if modal_open {
         &mut blocked_actions
@@ -187,6 +203,9 @@ pub fn draw_game_ui(ctx: UiContext<'_>) -> Vec<UiAction> {
     draw_ledger_panel(&ctx, mouse, background_actions);
     if ctx.journal_open {
         draw_journal_overlay(&ctx, mouse, &mut actions);
+    }
+    if ctx.manual_open {
+        draw_manual_overlay(&ctx, mouse, &mut actions);
     }
     if ctx.practice.open {
         draw_practice_overlay(&ctx, mouse, &mut actions);
@@ -336,6 +355,15 @@ fn draw_header(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut Vec<UiAction>) {
         mouse,
     ) {
         actions.push(UiAction::ToggleJournal);
+    }
+    if virtual_button(
+        Rect::new(rect.right() - 204.0, rect.y + 22.0, 86.0, 36.0),
+        "Manual",
+        true,
+        ButtonTone::Secondary,
+        mouse,
+    ) {
+        actions.push(UiAction::ToggleManual);
     }
 }
 

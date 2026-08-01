@@ -120,3 +120,34 @@ fn shortened_template_at(
         })
         .collect()
 }
+
+#[test]
+fn a_shape_costs_nothing_for_being_drawn_out_on_the_ring() {
+    // The promised follow-on to `rune_quality_does_not_depend_on_board_position`
+    // above: the spell grammar arrived (`.project/placement-rules.md`) and
+    // placement now means something, so `size_harmony` gave up its own quiet
+    // opinion about where a mark should sit. A shape at the heart shapes the
+    // whole working; the same shape drawn against one effect shapes only that
+    // effect. Both are deliberate, and neither is worth fewer points than the
+    // other — otherwise using the grammar is a tax.
+    let data = GameData::load().unwrap();
+    let heart = harmony_with_sphere_at(0.50, 0.50, &data);
+    let ring = harmony_with_sphere_at(0.74, 0.50, &data);
+
+    assert!(
+        (heart - ring).abs() < 1e-4,
+        "the shape's orbit changed size harmony: heart {heart:.4} vs ring {ring:.4}"
+    );
+}
+
+/// Size harmony of a fixed diagram with its `sphere` moved to `(x, y)`.
+fn harmony_with_sphere_at(x: f32, y: f32, data: &GameData) -> f32 {
+    let mut strokes = outer_circle();
+    strokes.extend(template_at("light", 0.28, 0.30, 0.18));
+    strokes.extend(template_at("continuous", 0.28, 0.70, 0.14));
+    strokes.extend(template_at("sphere", x, y, 0.15));
+    interpret_diagram(&strokes, data.runes.iter())
+        .spell
+        .map(|spell| spell.size_harmony)
+        .unwrap_or_default()
+}

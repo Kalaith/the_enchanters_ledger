@@ -341,6 +341,8 @@ pub(super) fn push_recognized_rune(
     let potency = potency_for_rune(category, scale, recognized.ink_ratio);
     interpreted.push(InterpretedRune {
         rune_id: recognized.rune_id,
+        // Set by `flatten_runes`, which is where scope nesting is known.
+        scope_depth: 0,
         confidence: recognized.confidence,
         quality: recognized.quality.clamp(0.0, 1.0),
         center,

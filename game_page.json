@@ -18,6 +18,10 @@
       "desc": "Hold on the slate to erase ink; right-click a selected guide rune to deselect"
     },
     {
+      "key": "M / J",
+      "desc": "Open the diagram manual (every quest's diagram) / the journal"
+    },
+    {
       "key": "T / D",
       "desc": "Test the diagram / deliver the product"
     },

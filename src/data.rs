@@ -73,6 +73,14 @@ pub struct RuneDef {
     pub glyph: String,
     pub category: RuneCategory,
     pub description: String,
+    /// How this rune reads when it acts on the whole working, and how it reads
+    /// when it acts on one other mark — see `crate::reading::sentences`. The
+    /// wording is data so that adding a rune never means writing a sentence in
+    /// Rust; both fall back to a plain phrase built from the name.
+    #[serde(default)]
+    pub reads_as: Option<String>,
+    #[serde(default)]
+    pub applied_reads_as: Option<String>,
     pub tier: u32,
     pub power: i32,
     pub stability: i32,

@@ -36,12 +36,12 @@ pub(super) fn draw_rune_palette(ctx: &UiContext<'_>, mouse: Vec2, actions: &mut 
         draw_rune_reference_card(
             ctx,
             rune,
-            Rect::new(content.x, content.y + 48.0, content.w, 148.0),
+            Rect::new(content.x, content.y + 48.0, content.w, 196.0),
         );
     }
 
     let col_w = content.w / RuneCategory::ALL.len() as f32;
-    let grid_top = content.y + 206.0;
+    let grid_top = content.y + 252.0;
     let known_by_category = RuneCategory::ALL
         .iter()
         .map(|category| {
@@ -211,25 +211,50 @@ fn draw_rune_reference_card(ctx: &UiContext<'_>, rune: &RuneDef, rect: Rect) {
     draw_text_block(
         &rune.description,
         rect.x + 112.0,
-        rect.y + 68.0,
+        rect.y + 62.0,
         rect.w - 122.0,
-        42.0,
+        44.0,
         12.0,
         2.0,
         Color::new(0.58, 0.64, 0.61, 1.0),
     );
+    // Both lines sit below the preview, across the card's full width, and both
+    // are kept to about two lines' worth. UI text is scaled 1.45× with a 16px
+    // floor (`main::amain`), so a block cannot shrink to fit the way its
+    // arguments suggest — it truncates instead, which is how the old, longer
+    // copy lost its second half.
     draw_text_block(
-        "Magnitude: drawn near reference size with a full stroke gives \
-         normal potency. Bigger, fully-traced ink raises it; a short or \
-         under-sized mark still reads, but weaker.",
-        rect.x + 112.0,
-        rect.y + 108.0,
-        rect.w - 122.0,
+        "Magnitude: reference size reads normal; smaller reads weaker.",
+        rect.x + 10.0,
+        rect.y + 106.0,
+        rect.w - 20.0,
         40.0,
         11.0,
         2.0,
         Color::new(0.50, 0.56, 0.53, 1.0),
     );
+    // The placement grammar, one line per category — the rune guide is where a
+    // player looks up what a mark does, so it has to say what changes when the
+    // mark is drawn against another (`.project/placement-rules.md` §5.5).
+    draw_text_block(
+        placement_hint(rune.category),
+        rect.x + 10.0,
+        rect.y + 148.0,
+        rect.w - 20.0,
+        40.0,
+        11.0,
+        2.0,
+        Color::new(0.62, 0.58, 0.44, 1.0),
+    );
+}
+
+fn placement_hint(category: RuneCategory) -> &'static str {
+    match category {
+        RuneCategory::Effect => "Placement: alone, fills the working; against a mark, only it.",
+        RuneCategory::Shape => "Placement: at the heart, shapes all; against one effect, only it.",
+        RuneCategory::Trigger => "Placement: says when the working acts, wherever drawn.",
+        RuneCategory::Modifier => "Placement: alone, tempers all; against a mark, only it.",
+    }
 }
 
 fn rune_tool_button(

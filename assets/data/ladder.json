@@ -1,0 +1,39 @@
+[
+  {
+    "level": 1,
+    "title": "Ten Simple Marks",
+    "complexity": "Easy",
+    "brief": "Ten plain marks around one circle, every one of them rank-one notation. Nothing here is hard to draw; the work is drawing ten of them small enough to stay apart and even enough to stay legible. Start at the top and go round.",
+    "rune_scale": 0.55,
+    "runes": [
+      "light",
+      "warmth",
+      "spark",
+      "sphere",
+      "touch",
+      "continuous",
+      "on_touch",
+      "safer",
+      "light",
+      "spark"
+    ]
+  },
+  {
+    "level": 2,
+    "title": "Nine Sharper Marks",
+    "complexity": "Moderate",
+    "brief": "One mark fewer, and every one of them costlier notation. Rank-two runes carry more strokes than the starter shelf did, and a stroke you rush is a stroke the circle misreads. Draw each mark whole before moving to the next.",
+    "rune_scale": 0.6,
+    "runes": [
+      "fire",
+      "frost",
+      "wind",
+      "aura",
+      "beam",
+      "on_command",
+      "on_impact",
+      "stronger",
+      "safer"
+    ]
+  }
+]

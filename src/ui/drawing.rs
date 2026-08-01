@@ -5,7 +5,7 @@ use super::canvas::{
 use super::widgets::{mouse_over_rect, muted_ink, parchment_line, parchment_page, virtual_button};
 use super::{UiAction, UiContext};
 use crate::rune_drawing::{template_strokes_for_rune, StrokePoint};
-use crate::state::{GuideTemplate, RuneMastery};
+use crate::state::{CircleGuide, GuideTemplate, RuneMastery};
 use macroquad::prelude::*;
 use macroquad_toolkit::prelude::*;
 use std::collections::HashMap;
@@ -35,6 +35,15 @@ pub(super) fn draw_drawing_slate(
     );
     draw_slate_grid(slate);
 
+    if let Some(circle) = &ctx.session.board.circle_guide {
+        draw_circle_guide(circle, slate);
+    }
+    draw_strokes(
+        &ctx.session.board.guide_structure,
+        slate,
+        Color::new(0.40, 0.27, 0.10, GUIDE_BASE_ALPHA),
+        1.8,
+    );
     draw_guide_templates(
         &ctx.session.board.guide_templates,
         slate,
@@ -76,6 +85,7 @@ pub(super) fn draw_drawing_slate(
         if let Some(diagram) = &ctx.session.board.last_diagram {
             draw_spell_feedback(diagram, slate);
         }
+        draw_reading(ctx.reading_lines, slate);
     }
 
     let drawing_active = ctx.session.board.active_stroke.is_some();
@@ -195,6 +205,21 @@ pub(super) fn draw_drawing_slate(
         2.0,
         muted_ink(),
     );
+    // Sits on the label row rather than the button strip below, which is already
+    // full: this is a "show me what it should look like" aid, not a fifth verb.
+    if virtual_button(
+        Rect::new(controls.x + 150.0, controls.y + 2.0, 104.0, 26.0),
+        if ctx.session.sandbox_mode {
+            "Ink Ideal"
+        } else {
+            "Reference"
+        },
+        !drawing_active,
+        ButtonTone::Secondary,
+        mouse,
+    ) {
+        actions.push(UiAction::ShowReferenceDiagram);
+    }
     // Gameplay actions first; the interpret/test result now lives in the ledger status block, so
     // the strip is buttons only and no longer overflows the panel edge.
     if virtual_button(
@@ -259,6 +284,42 @@ pub(super) fn draw_drawing_slate(
         mouse,
     ) {
         actions.push(UiAction::CopyDiagnostics);
+    }
+}
+
+/// The reading, revealed over the slate after Interpret.
+///
+/// This is the whole teaching surface for the placement grammar
+/// (`.project/placement-rules.md` §4): the player commits to a drawing, presses
+/// Interpret, and the game reads their handwriting back to them. Nothing shows
+/// while the pen is down — the uncertainty is the mechanic.
+fn draw_reading(lines: &[String], slate: Rect) {
+    if lines.is_empty() {
+        return;
+    }
+    let line_height = 19.0;
+    let card = Rect::new(
+        slate.x + 14.0,
+        slate.bottom() - 22.0 - lines.len() as f32 * line_height,
+        slate.w - 28.0,
+        14.0 + lines.len() as f32 * line_height,
+    );
+    draw_surface(
+        card,
+        &SurfaceStyle::new(Color::new(0.94, 0.88, 0.72, 0.93))
+            .with_border(1.0, Color::new(0.42, 0.27, 0.12, 0.70)),
+    );
+    for (index, line) in lines.iter().enumerate() {
+        draw_text_block(
+            line,
+            card.x + 12.0,
+            card.y + 6.0 + index as f32 * line_height,
+            card.w - 24.0,
+            line_height,
+            14.0,
+            1.0,
+            Color::new(0.10, 0.06, 0.03, 1.0),
+        );
     }
 }
 
@@ -351,6 +412,21 @@ fn draw_guide_templates(
             Color::new(0.40, 0.27, 0.10, alpha),
             1.8,
         );
+    }
+}
+
+/// Draws the working-circle tracing guide from the very points the reference ink
+/// would be made of, rather than a screen-space `draw_circle_lines`. Slate
+/// coordinates are normalized, so on a wider-than-tall slate a circle the
+/// recognizer scores as perfectly round renders as an ellipse — tracing the
+/// drawn line is what earns the score, so the drawn line has to be the real one.
+fn draw_circle_guide(circle: &CircleGuide, rect: Rect) {
+    let points = crate::perfect_diagram::circle_points(circle.center, circle.radius);
+    let color = Color::new(0.40, 0.27, 0.10, GUIDE_BASE_ALPHA);
+    for segment in points.windows(2) {
+        let start = point_to_screen(rect, segment[0]);
+        let end = point_to_screen(rect, segment[1]);
+        draw_line(start.x, start.y, end.x, end.y, 1.8, color);
     }
 }
 

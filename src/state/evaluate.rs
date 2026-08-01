@@ -1,8 +1,9 @@
 use super::{
-    node_distance, text, CraftReport, DiscoveredRecipe, DiscoveryReward, EnchantGrade,
-    EnchantResult, GameSession, WorkOrderKind, DISCOVERY_INSIGHT,
+    text, CraftReport, DiscoveredRecipe, DiscoveryReward, EnchantGrade, EnchantResult, GameSession,
+    WorkOrderKind, DISCOVERY_INSIGHT,
 };
 use crate::data::{GameData, RuneCategory, RuneDef};
+use crate::reading::{Reach, Reading};
 use crate::recipes::match_recipe;
 use crate::rune_diagram::ScopeSpell;
 use std::collections::{HashMap, HashSet};
@@ -267,7 +268,7 @@ impl GameSession {
         score += ((average_quality - 0.72) * 58.0).round() as i32;
         score -= weak_marks * 14;
 
-        let link_bonus = self.link_quality(data);
+        let link_bonus = self.relation_quality(data);
         power += link_bonus.power;
         stability += link_bonus.stability;
         mana_cost += link_bonus.cost;
@@ -411,48 +412,50 @@ impl GameSession {
             .collect()
     }
 
-    fn link_quality(&self, data: &GameData) -> LinkQuality {
+    /// Scores the relations the reading establishes — which mark acts on which
+    /// (`.project/placement-rules.md` §5.2). This replaces the old hidden 5×4
+    /// lattice, which chained runes in an invisible top-to-bottom order and
+    /// charged mana for how far apart they happened to land.
+    ///
+    /// Two things are scored. A mark drawn against another is a deliberate act,
+    /// and earns the per-relation bonus the old per-link one used to give. And
+    /// the category pairings a coherent working needs — an effect with a shape,
+    /// a shape with a trigger — are checked against *all* relations, including
+    /// the working-wide ones, so a diagram drawn evenly spread is still a
+    /// coherent working and still earns them. Distance costs nothing now.
+    fn relation_quality(&self, data: &GameData) -> LinkQuality {
         let mut quality = LinkQuality::default();
-        let mut seen_pairs = HashSet::new();
+        let Some(reading) = self.reading(data) else {
+            return quality;
+        };
 
-        for link in &self.board.links {
-            let (Some(a), Some(b)) = (self.board.rune_at(link.a), self.board.rune_at(link.b))
-            else {
-                continue;
-            };
-            let (Some(a_rune), Some(b_rune)) = (data.rune(a), data.rune(b)) else {
-                continue;
-            };
-            let categories = ordered_pair(a_rune.category, b_rune.category);
-            seen_pairs.insert(categories);
-            let distance = node_distance(link.a, link.b);
+        // Every mark in a working relates to the rest of it, so a diagram keeps
+        // the coherence bonus its size always earned — the old code paid this
+        // per grid link, which came to the same count. Marks *drawn together*
+        // earn it a second time: that is the deliberate act.
+        let marks = reading.marks.len() as i32;
+        let attached = reading
+            .marks
+            .iter()
+            .filter(|mark| matches!(mark.reach, Reach::Mark(_)))
+            .count() as i32;
+        let scored = (marks - 1).max(0) + attached;
+        quality.score += scored * 5;
+        quality.stability += scored * 4;
+        quality.power += scored * 2;
 
-            quality.score += 5;
-            quality.stability += 4;
-            quality.power += 2;
-            quality.cost += (distance - 1).max(0) * 2;
-            if distance > 2 {
-                quality.stability -= 4;
-                quality.safety -= 3;
-            }
-        }
-
-        if seen_pairs.contains(&ordered_pair(RuneCategory::Effect, RuneCategory::Shape)) {
+        let paired = category_pairs(&reading);
+        if paired.contains(&ordered_pair(RuneCategory::Effect, RuneCategory::Shape)) {
             quality.score += 10;
             quality.stability += 6;
         }
-        if seen_pairs.contains(&ordered_pair(RuneCategory::Shape, RuneCategory::Trigger)) {
+        if paired.contains(&ordered_pair(RuneCategory::Shape, RuneCategory::Trigger)) {
             quality.score += 10;
             quality.stability += 6;
         }
-        if seen_pairs.contains(&ordered_pair(RuneCategory::Effect, RuneCategory::Modifier)) {
+        if paired.contains(&ordered_pair(RuneCategory::Effect, RuneCategory::Modifier)) {
             quality.score += 5;
             quality.safety += 6;
-        }
-        if self.board.placed.len() >= 3 && self.board.links.len() >= self.board.placed.len() {
-            quality.score += 8;
-            quality.stability += 8;
-            quality.cost += 4;
         }
 
         quality
@@ -581,4 +584,18 @@ fn total_potency_excess(tree: &ScopeSpell, circle_quality: f32) -> f32 {
                 .sum::<f32>()
     }
     excess_at(tree, circle_quality, true)
+}
+
+/// Every category pairing the reading relates, in either direction.
+fn category_pairs(reading: &Reading) -> HashSet<(RuneCategory, RuneCategory)> {
+    reading
+        .relations()
+        .into_iter()
+        .map(|(actor, target)| {
+            ordered_pair(
+                reading.marks[actor].category,
+                reading.marks[target].category,
+            )
+        })
+        .collect()
 }

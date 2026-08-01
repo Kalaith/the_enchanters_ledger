@@ -50,10 +50,14 @@ pub(crate) fn diagram_acceptance_band(context: RecognitionContext) -> DiagramAcc
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiagramInterpretation {
     pub circle_quality: f32,
     pub circle_found: bool,
+    /// Centre of the working circle, in slate coordinates — the origin every
+    /// placement angle in `crate::reading` is measured from.
+    #[serde(default = "default_circle_center")]
+    pub circle_center: StrokePoint,
     pub runes: Vec<InterpretedRune>,
     pub rejected_marks: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,6 +115,20 @@ impl ScopeSpell {
     }
 }
 
+impl Default for DiagramInterpretation {
+    fn default() -> Self {
+        Self {
+            circle_quality: 0.0,
+            circle_found: false,
+            circle_center: default_circle_center(),
+            runes: Vec::new(),
+            rejected_marks: 0,
+            spell: None,
+            scope_spell: None,
+        }
+    }
+}
+
 impl DiagramInterpretation {
     /// `circle_found` is already exactly `circle_quality >= <the acceptance band's circle
     /// threshold>` computed at construction time (plan Phase 5 item 1) — re-deriving it against
@@ -149,6 +167,11 @@ pub struct InterpretedRune {
     pub scale: f32,
     #[serde(default)]
     pub orbit: f32,
+    /// Which scope this rune was read in: 0 for the working circle itself, 1
+    /// for a mark inside one of its sub-circles, and so on. `crate::reading`
+    /// only groups marks that share a scope — a scope is a sentence.
+    #[serde(default)]
+    pub scope_depth: u32,
     /// Magnitude channel (plan Phase 2): how strongly this rune's *size and
     /// completeness* — as opposed to its shape quality — should scale its
     /// effect. 1.0 at a category's reference size with a fully-traced
@@ -159,6 +182,10 @@ pub struct InterpretedRune {
 
 fn default_potency() -> f32 {
     1.0
+}
+
+fn default_circle_center() -> StrokePoint {
+    StrokePoint::new(0.5, 0.5)
 }
 
 /// Interprets `strokes` using the `Commission` acceptance band — bit-identical to this
@@ -214,12 +241,17 @@ pub fn interpret_diagram_in_context<'a>(
             .total_cmp(&b.center.y)
             .then(a.center.x.total_cmp(&b.center.x))
     });
+    // The reading (`crate::reading`) is what turns placement into meaning; the
+    // spell summary needs it so balance is measured over marks drawn together
+    // rather than over every mark separately.
+    let reading = crate::reading::read(&interpreted, circle_bounds.center(), &available_runes);
     let spell = if circle_found {
         analyze_magical_circle(
             circle_quality,
             &outcome.circle_marks,
             &interpreted,
             &available_runes,
+            &reading,
         )
     } else {
         None
@@ -235,6 +267,7 @@ pub fn interpret_diagram_in_context<'a>(
     DiagramInterpretation {
         circle_quality,
         circle_found,
+        circle_center: circle_bounds.center(),
         runes: interpreted,
         rejected_marks,
         spell,

@@ -250,10 +250,17 @@ pub(crate) fn interpret_scope(
 /// existing consumer of `DiagramInterpretation.runes` (UI, `evaluate()`'s per-rune stat math,
 /// tests) keeps working unchanged; only `build_scope_spell` (below) needs the tree shape.
 pub(crate) fn flatten_runes(outcome: &ScopeOutcome) -> Vec<InterpretedRune> {
-    let mut runes = outcome.own_runes.clone();
-    for sub in &outcome.sub_scopes {
-        runes.extend(flatten_runes(sub));
+    fn walk(outcome: &ScopeOutcome, depth: u32, runes: &mut Vec<InterpretedRune>) {
+        runes.extend(outcome.own_runes.iter().cloned().map(|mut rune| {
+            rune.scope_depth = depth;
+            rune
+        }));
+        for sub in &outcome.sub_scopes {
+            walk(sub, depth + 1, runes);
+        }
     }
+    let mut runes = Vec::new();
+    walk(outcome, 0, &mut runes);
     runes
 }
 

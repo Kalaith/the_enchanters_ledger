@@ -1,12 +1,14 @@
 //! High-level game loop, state transitions, and toolkit integration.
 
 use crate::browser_clipboard::{copy_text, ClipboardCopy};
-use crate::data::GameData;
+use crate::data::{CommissionDef, GameData};
 use crate::rune_diagnostics::diagnose_session;
 use crate::rune_drawing::{canonicalize_stroke, erase_strokes_at, DrawnStroke};
 use crate::rune_quality::RunePracticeReport;
 use crate::state::{migrate_save_value, CraftReport, GamePhase, GameSession, SaveData};
 use crate::ui::{self, PracticeUi, UiAction, UiContext};
+
+mod capture_scenes;
 use macroquad::prelude::*;
 use macroquad_toolkit::assets::AssetManager;
 use macroquad_toolkit::events::EventBus;
@@ -30,11 +32,17 @@ pub struct Game {
     save_slots: Vec<String>,
     rune_guide_pages: [usize; 4],
     journal_open: bool,
+    manual: Vec<crate::manual::ManualEntry>,
+    manual_open: bool,
+    manual_page: usize,
     settings_open: bool,
     settings: GameSettings,
     suppress_rune_erase: bool,
     guide_edit_mode: bool,
     interpretation_feedback_until: f64,
+    /// The last interpretation in plain language, held while the reveal is on
+    /// screen. Computed once per Interpret rather than per frame.
+    reading_lines: Vec<String>,
     practice: PracticeState,
 }
 
@@ -86,29 +94,29 @@ impl Game {
             save_exists: false,
             save_slots: Vec::new(),
             rune_guide_pages: [0; 4],
+            manual: Vec::new(),
+            manual_open: false,
+            manual_page: 0,
             journal_open: false,
             settings_open: false,
             settings,
             suppress_rune_erase: false,
             guide_edit_mode: false,
             interpretation_feedback_until: 0.0,
+            reading_lines: Vec::new(),
             practice: PracticeState::default(),
         };
+        // Built once: every quest's diagram is laid out from static data, so
+        // there is nothing per-frame or per-save about the manual.
+        game.manual = crate::manual::manual_entries(&game.data);
         game.refresh_save_state();
         game
     }
 
-    /// Seed a specific scene for the screenshot harness (see
-    /// `docs/screenshot_capture_harness_guide.md`).
+    /// Seed a specific scene for the screenshot harness — see
+    /// `capture_scenes`, which owns the scene list.
     pub fn begin_capture_scene(&mut self, scene: &str) {
-        match scene {
-            "title" => self.session.phase = GamePhase::Title,
-            "naming" => self.session.phase = GamePhase::Naming,
-            _ => {
-                // Default: jump straight into the workshop gameplay screen.
-                self.session.start_playing();
-            }
-        }
+        capture_scenes::begin(self, scene);
     }
 
     pub fn update(&mut self, dt: f32) {
@@ -140,11 +148,15 @@ impl Game {
             loaded_assets: self.assets.len(),
             rune_guide_pages: &self.rune_guide_pages,
             journal_open: self.journal_open,
+            manual_open: self.manual_open,
+            manual: &self.manual,
+            manual_page: self.manual_page,
             settings_open: self.settings_open,
             fullscreen: self.settings.fullscreen,
             suppress_rune_erase: self.suppress_rune_erase,
             guide_edit_mode: self.guide_edit_mode,
             interpretation_feedback_active: get_time() < self.interpretation_feedback_until,
+            reading_lines: &self.reading_lines,
             title_texture: &self.title_texture,
             practice: PracticeUi {
                 open: self.practice.open,
@@ -237,9 +249,14 @@ impl Game {
         if is_key_pressed(KeyCode::J) {
             self.events.push(UiAction::ToggleJournal);
         }
+        if is_key_pressed(KeyCode::M) {
+            self.events.push(UiAction::ToggleManual);
+        }
         if is_key_pressed(KeyCode::Escape) {
             if self.practice.open {
                 self.events.push(UiAction::ClosePractice);
+            } else if self.manual_open {
+                self.events.push(UiAction::CloseManual);
             } else if self.journal_open {
                 self.events.push(UiAction::CloseJournal);
             } else {
@@ -281,6 +298,30 @@ impl Game {
                 self.settings.save(&self.data.config.game_name).ok();
             }
             UiAction::ExitGame => self.exit_game(),
+            UiAction::ToggleManual => {
+                self.manual_open = !self.manual_open;
+                self.journal_open = false;
+            }
+            UiAction::CloseManual => self.manual_open = false,
+            UiAction::SetManualPage(page) => {
+                self.manual_page = page.min(self.manual.len().saturating_sub(1));
+            }
+            UiAction::LayOutManualDiagram(page) => {
+                let job = self.manual.get(page).map(|entry| entry.id.clone());
+                match job.and_then(|id| find_job(&self.data, &id)) {
+                    Some(job) => match self.session.place_reference_for(&job, &self.data) {
+                        Ok(msg) => {
+                            self.manual_open = false;
+                            self.hide_interpretation_feedback();
+                            self.notifications.info(msg);
+                        }
+                        Err(err) => self.notifications.warning(err),
+                    },
+                    None => self
+                        .notifications
+                        .warning("That page is no longer in the manual."),
+                }
+            }
             UiAction::ToggleJournal => {
                 self.journal_open = !self.journal_open;
             }
@@ -365,6 +406,15 @@ impl Game {
             }
             UiAction::PlaceRuneTemplate(point) => {
                 match self.session.place_guide_template(point, &self.data) {
+                    Ok(msg) => {
+                        self.hide_interpretation_feedback();
+                        self.notifications.info(msg);
+                    }
+                    Err(err) => self.notifications.warning(err),
+                }
+            }
+            UiAction::ShowReferenceDiagram => {
+                match self.session.place_reference_diagram(&self.data) {
                     Ok(msg) => {
                         self.hide_interpretation_feedback();
                         self.notifications.info(msg);
@@ -680,16 +730,30 @@ impl Game {
 
     fn show_interpretation_feedback(&mut self) {
         if self.session.board.last_diagram.is_some() {
-            self.interpretation_feedback_until = get_time() + 2.0;
+            // Long enough to read three or four sentences without hurrying —
+            // this is the moment the placement grammar is taught in.
+            self.interpretation_feedback_until = get_time() + 6.0;
+            self.reading_lines = self.session.reading_lines(&self.data);
         }
     }
 
     fn hide_interpretation_feedback(&mut self) {
         self.interpretation_feedback_until = 0.0;
+        self.reading_lines.clear();
     }
 }
 
 fn diagnostic_preview(log: &str, line_count: usize) -> String {
     let preview = log.lines().take(4).collect::<Vec<_>>().join(" | ");
     format!("Diagnostic log copied ({} lines). {}", line_count, preview)
+}
+
+/// The commission or talisman behind a manual page. The manual is built from
+/// the same data, so this is a lookup, not a search that can meaningfully fail.
+fn find_job(data: &GameData, id: &str) -> Option<CommissionDef> {
+    data.commissions
+        .iter()
+        .chain(&data.talisman_jobs)
+        .find(|job| job.id == id)
+        .cloned()
 }

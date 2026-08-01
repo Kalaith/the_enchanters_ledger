@@ -373,9 +373,15 @@ The previous `layout_quality` position bias (category home positions,
 the plan's own recommendation: freehand scoring should not silently
 penalize where a well-drawn rune was placed. See
 `rune_diagram::tests::rune_quality_does_not_depend_on_board_position`.
-Position semantics may return in Phase 4's spell grammar, where placement
-(e.g. a modifier between an effect and its ring) can mean something taught
-to the player — not before.
+Position semantics returned as promised, in `crate::reading` — see
+`.project/placement-rules.md`. Placement now means something *relative*:
+marks drawn deliberately close are read together, so a modifier pulled in
+beside one effect tempers that effect alone instead of the whole working,
+and a shape at the heart of the circle is the default the ring's marks make
+exceptions to. Absolute direction still means nothing: rotating a diagram
+produces the identical reading. None of it costs quality — the rule adds
+meaning rather than a penalty, and a diagram drawn evenly spread reads
+exactly as it did before the rule existed.
 
 ---
 

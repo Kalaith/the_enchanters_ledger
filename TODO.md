@@ -14,6 +14,17 @@ deliberately left open, plus outstanding test and structure work.
   `recover_contaminated_multi_stroke_rune` recovery.
 - Close out the one tracked confusion — `("safer", "sphere")` under sparse
   (14-point) resampling.
+- `sound` and `larger` cannot be read inside a diagram at all. Both recognize
+  perfectly on their own, but their component strokes sit far enough apart
+  (relative to their own size) that `rune_diagram::geometry::cluster_strokes`
+  never groups them: `sound`'s three chevrons split three ways, and `larger`'s
+  box and four detached arrow ticks split five ways with the box alone reading
+  as `sphere`. The clustering thresholds are size-relative, so no scale a player
+  can draw at helps — it needs either template geometry that clusters or a
+  grouping rule that spans the gap. Tracked by
+  `perfect_diagram::tests::fragmenting_runes_still_fragment`, which fails once
+  either is fixed. Affects the `alarm_bell` commission (`sound`) and
+  `spark_sign`'s optional `larger`.
 
 ## Performance
 
@@ -22,6 +33,17 @@ deliberately left open, plus outstanding test and structure work.
 - Per-cluster result cache and dirty-region re-interpretation. Not needed at
   current sizes (300-symbol diagrams interpret comfortably) — revisit if
   freehand play pushes past that.
+
+## Placement grammar
+
+`.project/placement-rules.md` is implemented (`src/reading/`); what it
+deliberately left for later:
+
+- Direction between two effects (`Light -> Fire` vs `Fire -> Light`), reserved
+  in §7. Adjacency has to be fluent first, and defining effect-with-effect now
+  would have to be undone to make room for it.
+- Ladder rungs that demand a specific reading rather than just a set of marks —
+  the grammar is the ladder's natural next axis of difficulty.
 
 ## Balance & UI
 

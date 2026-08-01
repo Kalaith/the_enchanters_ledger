@@ -7,7 +7,11 @@ mod browser_clipboard;
 mod corpus;
 mod data;
 mod game;
+mod ladder;
 mod magical_circle;
+mod manual;
+mod perfect_diagram;
+mod reading;
 mod recipes;
 mod rune_diagnostics;
 mod rune_diagram;
@@ -37,9 +41,19 @@ fn window_conf() -> Conf {
 /// through to the same `Window::from_config(window_conf(), amain())` call the attribute would
 /// have generated.
 fn main() {
-    if let Some(path) = diagnose_cli_path() {
+    if let Some(path) = cli_path_after("--diagnose") {
         match run_diagnose_cli(&path) {
             Ok(log) => println!("{log}"),
+            Err(err) => {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if let Some(dir) = cli_path_after("--manual") {
+        match run_manual_cli(&dir) {
+            Ok(written) => println!("wrote {}", written.display()),
             Err(err) => {
                 eprintln!("{err}");
                 std::process::exit(1);
@@ -50,14 +64,30 @@ fn main() {
     macroquad::Window::from_config(window_conf(), amain());
 }
 
-fn diagnose_cli_path() -> Option<std::path::PathBuf> {
+fn cli_path_after(flag: &str) -> Option<std::path::PathBuf> {
     let mut args = std::env::args();
     while let Some(arg) = args.next() {
-        if arg == "--diagnose" {
+        if arg == flag {
             return args.next().map(std::path::PathBuf::from);
         }
     }
     None
+}
+
+/// Writes the quest diagram manual (`manual::render_manual_page`) as one
+/// self-contained HTML file. Same rationale as `--diagnose` above: a
+/// windowless entry point into the crate, so the manual can be regenerated in
+/// CI or from a shell without booting the game.
+fn run_manual_cli(dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let data = data::GameData::load()?;
+    let entries = manual::manual_entries(&data);
+    let page = manual::render_manual_page(&entries, &data);
+    std::fs::create_dir_all(dir)
+        .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    let path = dir.join("index.html");
+    std::fs::write(&path, page)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    Ok(path)
 }
 
 fn run_diagnose_cli(path: &std::path::Path) -> Result<String, String> {

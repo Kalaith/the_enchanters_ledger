@@ -21,7 +21,13 @@ fn matching_design_scores_as_working_enchantment() {
     assert_ne!(report.result.grade, EnchantGrade::Failed);
     assert_eq!(session.discoveries.len(), 1);
     assert_eq!(session.board.placed.len(), 3);
-    assert_eq!(session.board.links.len(), 2);
+    // Drawn evenly spread, so the reading joins nothing: every mark acts on the
+    // whole working (`.project/placement-rules.md` §3).
+    let reading = session.reading(&data).unwrap();
+    assert!(reading
+        .marks
+        .iter()
+        .all(|mark| mark.reach == crate::reading::Reach::Working));
 }
 
 #[test]
