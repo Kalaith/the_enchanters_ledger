@@ -5,12 +5,16 @@ use macroquad_toolkit::data_loader::{load_embedded_json, load_embedded_json_labe
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-const GAME_CONFIG_JSON: &str = include_str!("../assets/data/game_config.json");
-const RUNES_JSON: &str = include_str!("../assets/data/runes.json");
-const COMMISSIONS_JSON: &str = include_str!("../assets/data/commissions.json");
-const TALISMAN_JOBS_JSON: &str = include_str!("../assets/data/talisman_jobs.json");
-const RECIPES_JSON: &str = include_str!("../assets/data/recipes.json");
-const TEXTURE_MANIFEST_JSON: &str = include_str!("../assets/data/texture_manifest.json");
+const GAME_CONFIG_JSON: &str =
+    macroquad_toolkit::include_json_str!("../assets/data/game_config.json");
+const RUNES_JSON: &str = macroquad_toolkit::include_json_str!("../assets/data/runes.json");
+const COMMISSIONS_JSON: &str =
+    macroquad_toolkit::include_json_str!("../assets/data/commissions.json");
+const TALISMAN_JOBS_JSON: &str =
+    macroquad_toolkit::include_json_str!("../assets/data/talisman_jobs.json");
+const RECIPES_JSON: &str = macroquad_toolkit::include_json_str!("../assets/data/recipes.json");
+const TEXTURE_MANIFEST_JSON: &str =
+    macroquad_toolkit::include_json_str!("../assets/data/texture_manifest.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameConfig {
@@ -238,17 +242,4 @@ impl GameData {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn embedded_data_loads() {
-        let data = GameData::load().unwrap();
-
-        assert_eq!(data.config.game_name, "the_enchanters_ledger");
-        assert!(data.rune("light").is_some());
-        assert!(data.rune("continuous").is_some());
-        assert!(!data.commissions.is_empty());
-        assert!(!data.talisman_jobs.is_empty());
-    }
-}
+mod tests;

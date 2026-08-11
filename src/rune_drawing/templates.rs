@@ -3,7 +3,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-const RUNE_TEMPLATES_JSON: &str = include_str!("../../assets/data/rune_templates.json");
+const RUNE_TEMPLATES_JSON: &str =
+    macroquad_toolkit::include_json_str!("../../assets/data/rune_templates.json");
 
 #[derive(Debug, Deserialize)]
 struct TemplateEntry {

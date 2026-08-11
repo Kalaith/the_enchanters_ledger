@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 #[cfg(test)]
 mod tests;
 
-const LADDER_JSON: &str = include_str!("../assets/data/ladder.json");
+const LADDER_JSON: &str = macroquad_toolkit::include_json_str!("../assets/data/ladder.json");
 
 /// One rung: what to draw, and how hard it is meant to be.
 #[derive(Debug, Clone, Deserialize)]
