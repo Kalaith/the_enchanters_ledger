@@ -49,5 +49,5 @@
     }
   ],
   "wasm_cache_bust": "date-now",
-  "repository": "https://github.com/Kalaith/the_enchanters_ledger"
+  "repository": "https://github.com/WebHatchery/the_enchanters_ledger"
 }
